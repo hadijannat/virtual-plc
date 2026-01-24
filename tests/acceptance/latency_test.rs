@@ -17,8 +17,8 @@
 //! - Zero deadline overruns
 
 use super::common::{
-    check_rt_prerequisites, has_stress_ng, num_cpus, run_cyclictest,
-    start_stress_ng, AcceptanceCriteria,
+    check_rt_prerequisites, has_stress_ng, num_cpus, run_cyclictest, start_stress_ng,
+    AcceptanceCriteria,
 };
 use std::time::Duration;
 
@@ -35,7 +35,7 @@ fn test_latency_no_load() {
     println!("Running latency test without load...");
 
     let stats = run_cyclictest(
-        10, // 10 seconds
+        10,   // 10 seconds
         1000, // 1ms interval
         99,   // Max RT priority
         None, // All CPUs
@@ -73,10 +73,7 @@ fn test_latency_under_cpu_load() {
     }
 
     let cpus = num_cpus();
-    println!(
-        "Running latency test under CPU load ({} workers)...",
-        cpus
-    );
+    println!("Running latency test under CPU load ({} workers)...", cpus);
 
     // Start stress-ng
     let mut stress = start_stress_ng(cpus, 0).expect("Failed to start stress-ng");
@@ -85,7 +82,7 @@ fn test_latency_under_cpu_load() {
     std::thread::sleep(Duration::from_secs(2));
 
     let stats = run_cyclictest(
-        30, // 30 seconds
+        30,   // 30 seconds
         1000, // 1ms interval
         99,   // Max RT priority
         None, // All CPUs
@@ -143,7 +140,7 @@ fn test_latency_under_mixed_load() {
     std::thread::sleep(Duration::from_secs(3));
 
     let stats = run_cyclictest(
-        60, // 60 seconds
+        60,   // 60 seconds
         1000, // 1ms interval
         99,   // Max RT priority
         None, // All CPUs
@@ -199,7 +196,7 @@ fn test_latency_extended() {
     std::thread::sleep(Duration::from_secs(3));
 
     let stats = run_cyclictest(
-        600, // 10 minutes
+        600,  // 10 minutes
         1000, // 1ms interval
         99,   // Max RT priority
         None, // All CPUs
@@ -257,7 +254,7 @@ fn test_latency_isolated_cpu() {
     std::thread::sleep(Duration::from_secs(2));
 
     let stats = run_cyclictest(
-        30, // 30 seconds
+        30,   // 30 seconds
         1000, // 1ms interval
         99,   // Max RT priority
         Some(isolated_cpu),

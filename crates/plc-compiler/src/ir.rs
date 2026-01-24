@@ -92,29 +92,53 @@ pub enum Instruction {
 
     // Memory operations
     /// Load i32 from memory address.
-    I32Load { offset: u32 },
+    I32Load {
+        offset: u32,
+    },
     /// Load i64 from memory.
-    I64Load { offset: u32 },
+    I64Load {
+        offset: u32,
+    },
     /// Load f32 from memory.
-    F32Load { offset: u32 },
+    F32Load {
+        offset: u32,
+    },
     /// Load f64 from memory.
-    F64Load { offset: u32 },
+    F64Load {
+        offset: u32,
+    },
     /// Load i8 and sign-extend to i32.
-    I32Load8S { offset: u32 },
+    I32Load8S {
+        offset: u32,
+    },
     /// Load i16 and sign-extend to i32.
-    I32Load16S { offset: u32 },
+    I32Load16S {
+        offset: u32,
+    },
     /// Store i32 to memory.
-    I32Store { offset: u32 },
+    I32Store {
+        offset: u32,
+    },
     /// Store i64 to memory.
-    I64Store { offset: u32 },
+    I64Store {
+        offset: u32,
+    },
     /// Store f32 to memory.
-    F32Store { offset: u32 },
+    F32Store {
+        offset: u32,
+    },
     /// Store f64 to memory.
-    F64Store { offset: u32 },
+    F64Store {
+        offset: u32,
+    },
     /// Store i8 to memory.
-    I32Store8 { offset: u32 },
+    I32Store8 {
+        offset: u32,
+    },
     /// Store i16 to memory.
-    I32Store16 { offset: u32 },
+    I32Store16 {
+        offset: u32,
+    },
 
     // Local variables
     /// Get local variable.
@@ -815,7 +839,8 @@ impl IrLowerer {
                 self.current_body.push(Instruction::I32Store8 { offset: 0 });
             }
             DataType::Int | DataType::Uint | DataType::Word => {
-                self.current_body.push(Instruction::I32Store16 { offset: 0 });
+                self.current_body
+                    .push(Instruction::I32Store16 { offset: 0 });
             }
             DataType::Dint | DataType::Udint | DataType::Dword => {
                 self.current_body.push(Instruction::I32Store { offset: 0 });

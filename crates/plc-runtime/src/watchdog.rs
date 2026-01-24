@@ -58,7 +58,8 @@ impl WatchdogState {
 
     /// Record a kick.
     fn kick(&self) {
-        self.last_kick_ns.store(self.elapsed_ns(), Ordering::Release);
+        self.last_kick_ns
+            .store(self.elapsed_ns(), Ordering::Release);
     }
 
     /// Check if watchdog has timed out.
@@ -280,7 +281,8 @@ impl HardwareWatchdog {
 
         info!(
             timeout_secs,
-            actual_timeout = timeout, "Hardware watchdog opened"
+            actual_timeout = timeout,
+            "Hardware watchdog opened"
         );
 
         Ok(Self {

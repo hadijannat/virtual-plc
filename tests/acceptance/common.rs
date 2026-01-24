@@ -9,8 +9,8 @@
 
 use std::fs;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 /// Global counter for unique temp file names.
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -313,7 +313,10 @@ fn parse_histogram_percentiles(content: &str, stats: &mut LatencyStats) {
 /// Start stress-ng load generators.
 ///
 /// Returns the child process handle.
-pub fn start_stress_ng(cpu_workers: usize, io_workers: usize) -> Result<std::process::Child, String> {
+pub fn start_stress_ng(
+    cpu_workers: usize,
+    io_workers: usize,
+) -> Result<std::process::Child, String> {
     Command::new("stress-ng")
         .arg("--cpu")
         .arg(cpu_workers.to_string())
@@ -434,7 +437,8 @@ mod tests {
         let histpath = histfile.path().to_str().unwrap();
 
         // Test standard cyclictest output format
-        let output = "T: 0 ( 1234) P:99 I:1000 C:  10000 Min:      1 Act:    5 Avg:    3 Max:      42";
+        let output =
+            "T: 0 ( 1234) P:99 I:1000 C:  10000 Min:      1 Act:    5 Avg:    3 Max:      42";
         let result = parse_cyclictest_output(output, histpath);
         assert!(result.is_ok(), "Parse should succeed: {:?}", result);
         let stats = result.unwrap();

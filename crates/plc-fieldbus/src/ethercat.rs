@@ -171,7 +171,10 @@ impl ProcessImage {
     /// Read a u16 from inputs (little-endian).
     pub fn read_input_u16(&self, offset: usize) -> Option<u16> {
         if offset + 2 <= self.inputs.len() {
-            Some(u16::from_le_bytes([self.inputs[offset], self.inputs[offset + 1]]))
+            Some(u16::from_le_bytes([
+                self.inputs[offset],
+                self.inputs[offset + 1],
+            ]))
         } else {
             None
         }
@@ -691,7 +694,10 @@ impl SimulatedTransport {
     /// Create a new simulated transport.
     pub fn new(config: &EthercatConfig) -> Self {
         Self {
-            interface: config.interface.clone().unwrap_or_else(|| "simulated".into()),
+            interface: config
+                .interface
+                .clone()
+                .unwrap_or_else(|| "simulated".into()),
             slaves: Vec::new(),
             current_state: SlaveState::Init,
             dc_time: 0,

@@ -73,7 +73,11 @@ fn parse_program(pair: Pair<Rule>) -> Result<Program> {
         }
     }
 
-    Ok(Program { name, variables, body })
+    Ok(Program {
+        name,
+        variables,
+        body,
+    })
 }
 
 fn parse_function_block(pair: Pair<Rule>) -> Result<FunctionBlock> {
@@ -96,7 +100,11 @@ fn parse_function_block(pair: Pair<Rule>) -> Result<FunctionBlock> {
         }
     }
 
-    Ok(FunctionBlock { name, variables, body })
+    Ok(FunctionBlock {
+        name,
+        variables,
+        body,
+    })
 }
 
 fn parse_function(pair: Pair<Rule>) -> Result<Function> {
@@ -120,7 +128,12 @@ fn parse_function(pair: Pair<Rule>) -> Result<Function> {
         }
     }
 
-    Ok(Function { name, return_type, variables, body })
+    Ok(Function {
+        name,
+        return_type,
+        variables,
+        body,
+    })
 }
 
 fn parse_var_block(pair: Pair<Rule>) -> Result<VarBlock> {
@@ -164,7 +177,12 @@ fn parse_var_block(pair: Pair<Rule>) -> Result<VarBlock> {
         }
     }
 
-    Ok(VarBlock { kind, retain, constant, declarations })
+    Ok(VarBlock {
+        kind,
+        retain,
+        constant,
+        declarations,
+    })
 }
 
 /// Parse a variable declaration, which may declare multiple variables
@@ -275,9 +293,10 @@ fn parse_data_type(pair: Pair<Rule>) -> Result<DataType> {
 fn expr_to_i64(expr: &Expression) -> Result<i64> {
     match expr {
         Expression::Literal(Literal::Integer(n)) => Ok(*n),
-        Expression::Unary { op: UnaryOp::Neg, operand } => {
-            expr_to_i64(&operand.node).map(|n| -n)
-        }
+        Expression::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => expr_to_i64(&operand.node).map(|n| -n),
         _ => Err(anyhow!("Expected constant integer expression")),
     }
 }
@@ -731,12 +750,18 @@ fn parse_primary_expr_inner(pair: Pair<Rule>) -> Result<Expression> {
     match inner.as_rule() {
         Rule::expression => {
             let expr = parse_expression(inner)?;
-            Ok(Expression::Paren(Box::new(Spanned::new(expr, Span::default()))))
+            Ok(Expression::Paren(Box::new(Spanned::new(
+                expr,
+                Span::default(),
+            ))))
         }
         Rule::function_call => parse_function_call(inner),
         Rule::literal => parse_literal(inner),
         Rule::variable => parse_variable(inner),
-        _ => Err(anyhow!("Unexpected primary expression: {:?}", inner.as_rule())),
+        _ => Err(anyhow!(
+            "Unexpected primary expression: {:?}",
+            inner.as_rule()
+        )),
     }
 }
 

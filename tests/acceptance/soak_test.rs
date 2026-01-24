@@ -46,9 +46,9 @@ impl Default for SoakConfig {
     fn default() -> Self {
         Self {
             duration: Duration::from_secs(60), // Default: 1 minute for quick tests
-            cycle_time_us: 1_000,               // 1ms cycles
-            sample_interval_cycles: 1000,       // Sample every 1000 cycles
-            log_interval_secs: 60,              // Log every minute
+            cycle_time_us: 1_000,              // 1ms cycles
+            sample_interval_cycles: 1000,      // Sample every 1000 cycles
+            log_interval_secs: 60,             // Log every minute
             max_memory_growth_per_hour: 1024 * 1024, // 1MB/hour
             max_faults: 0,
             log_file: None,
@@ -280,17 +280,31 @@ pub fn run_soak_test(config: &SoakConfig) -> SoakResult {
     println!("  Cycles: {}", result.total_cycles);
     println!("  Faults: {}", result.faults);
     println!("  Overruns: {}", metrics.overruns);
-    println!("  Latency: min={}µs avg={}µs max={}µs",
-        metrics.min_cycle_us, metrics.avg_cycle_us(), metrics.max_cycle_us);
-    println!("  Memory: initial={:.1}MB peak={:.1}MB growth={:.1}KB/hour",
+    println!(
+        "  Latency: min={}µs avg={}µs max={}µs",
+        metrics.min_cycle_us,
+        metrics.avg_cycle_us(),
+        metrics.max_cycle_us
+    );
+    println!(
+        "  Memory: initial={:.1}MB peak={:.1}MB growth={:.1}KB/hour",
         metrics.initial_memory as f64 / (1024.0 * 1024.0),
         metrics.peak_memory as f64 / (1024.0 * 1024.0),
-        memory_growth_per_hour as f64 / 1024.0);
-    println!("  Result: {}", if result.passed { "PASSED" } else { "FAILED" });
+        memory_growth_per_hour as f64 / 1024.0
+    );
+    println!(
+        "  Result: {}",
+        if result.passed { "PASSED" } else { "FAILED" }
+    );
 
     if let Some(ref mut f) = log_file {
         writeln!(f, "---").ok();
-        writeln!(f, "Test completed: {}", if result.passed { "PASSED" } else { "FAILED" }).ok();
+        writeln!(
+            f,
+            "Test completed: {}",
+            if result.passed { "PASSED" } else { "FAILED" }
+        )
+        .ok();
     }
 
     result
@@ -330,13 +344,18 @@ fn test_soak_full_acceptance() {
     let config = SoakConfig::full_acceptance();
     let result = run_soak_test(&config);
 
-    assert!(result.passed,
+    assert!(
+        result.passed,
         "Full acceptance soak test failed: faults={}, overruns={}",
-        result.faults, result.latency.overruns);
+        result.faults, result.latency.overruns
+    );
 
     // Additional acceptance criteria
     assert_eq!(result.faults, 0, "Zero faults required for acceptance");
-    assert_eq!(result.latency.overruns, 0, "Zero overruns required for acceptance");
+    assert_eq!(
+        result.latency.overruns, 0,
+        "Zero overruns required for acceptance"
+    );
 }
 
 /// Test memory stability during soak.
@@ -346,7 +365,7 @@ fn test_soak_full_acceptance() {
 fn test_memory_stability() {
     let config = SoakConfig {
         duration: Duration::from_secs(300), // 5 minutes
-        sample_interval_cycles: 100,         // Sample frequently
+        sample_interval_cycles: 100,        // Sample frequently
         log_interval_secs: 60,
         max_memory_growth_per_hour: 512 * 1024, // Strict: 512KB/hour
         ..Default::default()
@@ -355,8 +374,10 @@ fn test_memory_stability() {
     let result = run_soak_test(&config);
 
     // Allow some growth but flag significant leaks
-    assert!(result.passed,
-        "Memory stability test failed - potential memory leak detected");
+    assert!(
+        result.passed,
+        "Memory stability test failed - potential memory leak detected"
+    );
 }
 
 /// Test cycle time consistency during extended run.
@@ -365,7 +386,7 @@ fn test_memory_stability() {
 fn test_cycle_consistency() {
     let config = SoakConfig {
         duration: Duration::from_secs(120), // 2 minutes
-        cycle_time_us: 1_000,                // 1ms target
+        cycle_time_us: 1_000,               // 1ms target
         sample_interval_cycles: 100,
         log_interval_secs: 30,
         ..Default::default()

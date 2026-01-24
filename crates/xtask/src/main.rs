@@ -1,7 +1,7 @@
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name="xtask", about="Project automation tasks", version)]
+#[command(name = "xtask", about = "Project automation tasks", version)]
 struct Args {
     #[arg(long)]
     task: Option<String>,

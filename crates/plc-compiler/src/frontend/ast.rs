@@ -21,7 +21,12 @@ pub struct Span {
 impl Span {
     /// Create a new span.
     pub fn new(start: usize, end: usize, line: usize, column: usize) -> Self {
-        Self { start, end, line, column }
+        Self {
+            start,
+            end,
+            line,
+            column,
+        }
     }
 
     /// Merge two spans into one covering both.
@@ -30,7 +35,11 @@ impl Span {
             start: self.start.min(other.start),
             end: self.end.max(other.end),
             line: self.line.min(other.line),
-            column: if self.line <= other.line { self.column } else { other.column },
+            column: if self.line <= other.line {
+                self.column
+            } else {
+                other.column
+            },
         }
     }
 }
@@ -299,7 +308,11 @@ impl fmt::Display for DataType {
             DataType::String(Some(len)) => write!(f, "STRING[{len}]"),
             DataType::WString(None) => write!(f, "WSTRING"),
             DataType::WString(Some(len)) => write!(f, "WSTRING[{len}]"),
-            DataType::Array { lower, upper, element_type } => {
+            DataType::Array {
+                lower,
+                upper,
+                element_type,
+            } => {
                 write!(f, "ARRAY[{lower}..{upper}] OF {element_type}")
             }
             DataType::Named(name) => write!(f, "{name}"),
@@ -320,7 +333,11 @@ impl DataType {
             DataType::Date | DataType::TimeOfDay | DataType::DateTime => Some(8),
             DataType::String(Some(len)) => Some(len + 1),
             DataType::WString(Some(len)) => Some((len + 1) * 2),
-            DataType::Array { lower, upper, element_type } => {
+            DataType::Array {
+                lower,
+                upper,
+                element_type,
+            } => {
                 let count = (upper - lower + 1) as usize;
                 element_type.size_bytes().map(|s| s * count)
             }

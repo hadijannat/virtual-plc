@@ -31,7 +31,11 @@ fn test_compile_blink_program() {
     // Verify Wasm magic number
     assert_eq!(&wasm[0..4], &[0x00, 0x61, 0x73, 0x6d], "Invalid Wasm magic");
     // Verify Wasm version (1)
-    assert_eq!(&wasm[4..8], &[0x01, 0x00, 0x00, 0x00], "Invalid Wasm version");
+    assert_eq!(
+        &wasm[4..8],
+        &[0x01, 0x00, 0x00, 0x00],
+        "Invalid Wasm version"
+    );
 }
 
 /// Test compiling a program with arithmetic expressions.

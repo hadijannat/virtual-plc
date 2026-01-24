@@ -189,7 +189,11 @@ impl DiagnosticsCollector {
     }
 
     /// Create a snapshot of current diagnostics.
-    pub fn snapshot(&self, runtime_state: RuntimeState, metrics: &CycleMetrics) -> DiagnosticsSnapshot {
+    pub fn snapshot(
+        &self,
+        runtime_state: RuntimeState,
+        metrics: &CycleMetrics,
+    ) -> DiagnosticsSnapshot {
         DiagnosticsSnapshot {
             health: self.health_from_state(runtime_state),
             state: runtime_state,
@@ -230,10 +234,7 @@ pub fn format_prometheus_metrics(snapshot: &DiagnosticsSnapshot, target_cycle_ns
     // Runtime state
     output.push_str("# HELP plc_state Current runtime state\n");
     output.push_str("# TYPE plc_state gauge\n");
-    output.push_str(&format!(
-        "plc_state {{state=\"{}\"}} 1\n",
-        snapshot.state
-    ));
+    output.push_str(&format!("plc_state {{state=\"{}\"}} 1\n", snapshot.state));
 
     // Cycle count
     output.push_str("# HELP plc_cycles_total Total PLC cycles executed\n");

@@ -108,7 +108,7 @@ impl Default for TestIoImage {
             digital_outputs: 0,
             analog_outputs: [0; 2],
             state: OutputState::Normal,
-            safe_digital: 0x00, // All off
+            safe_digital: 0x00,  // All off
             safe_analog: [0; 2], // Zero output
         }
     }
@@ -177,7 +177,10 @@ fn test_watchdog_timeout_detection() {
         thread::sleep(Duration::from_millis(1));
     }
 
-    assert!(!watchdog.check(), "Watchdog should not trigger during normal operation");
+    assert!(
+        !watchdog.check(),
+        "Watchdog should not trigger during normal operation"
+    );
 
     // Now stop kicking and wait for timeout
     let fault_start = Instant::now();
@@ -246,7 +249,10 @@ fn test_cycle_overrun_detection() {
             if overrun_us > max_overrun_us {
                 max_overrun_us = overrun_us;
             }
-            println!("  Cycle {} overrun: {}µs (elapsed: {}µs)", i, overrun_us, elapsed_us);
+            println!(
+                "  Cycle {} overrun: {}µs (elapsed: {}µs)",
+                i, overrun_us, elapsed_us
+            );
         }
     }
 
@@ -304,8 +310,15 @@ fn test_fault_recovery_sequence() {
         thread::sleep(Duration::from_millis(1));
     }
 
-    assert!(!watchdog.check(), "Watchdog should not trigger after recovery");
-    assert_eq!(io.state, OutputState::Normal, "Should be in normal operation");
+    assert!(
+        !watchdog.check(),
+        "Watchdog should not trigger after recovery"
+    );
+    assert_eq!(
+        io.state,
+        OutputState::Normal,
+        "Should be in normal operation"
+    );
     println!("  Resumed normal operation");
 
     println!("  PASSED: Fault recovery sequence");
@@ -412,7 +425,8 @@ fn test_multiple_fault_types() {
             },
         };
 
-        println!("  {:?}: {}µs - {}",
+        println!(
+            "  {:?}: {}µs - {}",
             result.fault_type,
             result.response_time_us,
             if result.passed { "PASS" } else { "FAIL" }
@@ -441,7 +455,11 @@ fn test_watchdog_timeout_range() {
             watchdog.kick();
             let wait_time = timeout_us / 5; // Wait 20% of timeout
             thread::sleep(Duration::from_micros(wait_time));
-            assert!(!watchdog.check(), "Watchdog should not trigger at {}µs timeout", timeout_us);
+            assert!(
+                !watchdog.check(),
+                "Watchdog should not trigger at {}µs timeout",
+                timeout_us
+            );
         }
 
         // Now let it timeout
@@ -456,11 +474,15 @@ fn test_watchdog_timeout_range() {
         let actual_timeout_us = start.elapsed().as_micros() as u64;
         let tolerance_us = timeout_us / 10; // 10% tolerance
 
-        println!("  Timeout {}µs: triggered at {}µs", timeout_us, actual_timeout_us);
+        println!(
+            "  Timeout {}µs: triggered at {}µs",
+            timeout_us, actual_timeout_us
+        );
 
         // Watchdog should trigger within tolerance of specified timeout
         assert!(
-            actual_timeout_us >= timeout_us && actual_timeout_us <= timeout_us + tolerance_us + 1000,
+            actual_timeout_us >= timeout_us
+                && actual_timeout_us <= timeout_us + tolerance_us + 1000,
             "Watchdog {}µs triggered at {}µs (outside tolerance)",
             timeout_us,
             actual_timeout_us

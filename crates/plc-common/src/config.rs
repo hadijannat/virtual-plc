@@ -551,6 +551,10 @@ mod tests {
         let mut config = RuntimeConfig::default();
         config.fieldbus.driver = FieldbusDriver::ModbusTcp;
         let serialized = config.to_toml().unwrap();
-        assert!(serialized.contains("modbus_tcp"), "Expected 'modbus_tcp' in serialized TOML: {}", serialized);
+        assert!(
+            serialized.contains("modbus_tcp"),
+            "Expected 'modbus_tcp' in serialized TOML: {}",
+            serialized
+        );
     }
 }

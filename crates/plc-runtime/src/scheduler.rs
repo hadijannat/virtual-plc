@@ -60,10 +60,7 @@ pub struct Scheduler<E: LogicEngine> {
 impl<E: LogicEngine> Scheduler<E> {
     /// Create a new scheduler with the given logic engine and configuration.
     pub fn new(engine: E, config: &RuntimeConfig) -> Self {
-        let metrics = CycleMetrics::new(
-            config.metrics.histogram_size,
-            config.cycle_time,
-        );
+        let metrics = CycleMetrics::new(config.metrics.histogram_size, config.cycle_time);
 
         Self {
             io: IoImage::new(),
@@ -115,9 +112,9 @@ impl<E: LogicEngine> Scheduler<E> {
         self.state.transition(RuntimeState::Init)?;
 
         // Initialize the logic engine
-        self.engine.init().map_err(|e| {
-            PlcError::Config(format!("Logic engine initialization failed: {e}"))
-        })?;
+        self.engine
+            .init()
+            .map_err(|e| PlcError::Config(format!("Logic engine initialization failed: {e}")))?;
 
         // INIT → PRE_OP
         self.state.transition(RuntimeState::PreOp)?;
@@ -423,7 +420,8 @@ impl<E: LogicEngine> Scheduler<E> {
         // Calculate absolute deadline by adding remaining duration to current time
         let deadline_nanos = current_ts.tv_nsec as u64 + duration.subsec_nanos() as u64;
         let deadline_ts = libc::timespec {
-            tv_sec: current_ts.tv_sec + duration.as_secs() as libc::time_t
+            tv_sec: current_ts.tv_sec
+                + duration.as_secs() as libc::time_t
                 + (deadline_nanos / 1_000_000_000) as libc::time_t,
             tv_nsec: (deadline_nanos % 1_000_000_000) as libc::c_long,
         };
@@ -466,7 +464,9 @@ impl<E: LogicEngine> Scheduler<E> {
 
     /// Check if the watchdog has triggered.
     pub fn watchdog_triggered(&self) -> bool {
-        self.watchdog.as_ref().map_or(false, |wd| wd.has_triggered())
+        self.watchdog
+            .as_ref()
+            .map_or(false, |wd| wd.has_triggered())
     }
 }
 
@@ -547,7 +547,10 @@ mod tests {
             Ok(())
         }
 
-        fn step(&mut self, inputs: &crate::io_image::ProcessData) -> PlcResult<crate::io_image::ProcessData> {
+        fn step(
+            &mut self,
+            inputs: &crate::io_image::ProcessData,
+        ) -> PlcResult<crate::io_image::ProcessData> {
             if self.should_fail {
                 return Err(PlcError::Fault("Simulated failure".into()));
             }

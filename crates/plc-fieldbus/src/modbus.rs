@@ -4,6 +4,10 @@ use plc_common::PlcResult;
 pub struct ModbusTcpDriver;
 
 impl ModbusTcpDriver {
-    pub fn new() -> Self { Self }
-    pub fn init(&mut self) -> PlcResult<()> { Ok(()) }
+    pub fn new() -> Self {
+        Self
+    }
+    pub fn init(&mut self) -> PlcResult<()> {
+        Ok(())
+    }
 }

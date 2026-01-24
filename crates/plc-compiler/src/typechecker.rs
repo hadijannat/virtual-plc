@@ -7,8 +7,8 @@
 
 use crate::frontend::{
     BinaryOp, CaseStatement, CompilationUnit, DataType, Expression, ForStatement, Function,
-    FunctionBlock, IfStatement, Literal, Program, ProgramUnit, RepeatStatement, Spanned,
-    Statement, UnaryOp, VarBlock, VarBlockKind, VarDecl, WhileStatement,
+    FunctionBlock, IfStatement, Literal, Program, ProgramUnit, RepeatStatement, Spanned, Statement,
+    UnaryOp, VarBlock, VarBlockKind, VarDecl, WhileStatement,
 };
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -774,8 +774,10 @@ impl TypeChecker {
                 })
             }
             Expression::Call { name, arguments } => {
-                let args: Result<Vec<_>> =
-                    arguments.iter().map(|a| self.check_expr(&a.value.node)).collect();
+                let args: Result<Vec<_>> = arguments
+                    .iter()
+                    .map(|a| self.check_expr(&a.value.node))
+                    .collect();
 
                 // Look up function signature - error if not found
                 let func_sig = self
@@ -864,9 +866,12 @@ impl TypeChecker {
     ) -> Result<DataType> {
         match op {
             // Comparison operators always return BOOL
-            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-                Ok(DataType::Bool)
-            }
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge => Ok(DataType::Bool),
             // Logical operators require BOOL
             BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {
                 if *left == DataType::Bool && *right == DataType::Bool {
@@ -876,13 +881,18 @@ impl TypeChecker {
                 }
             }
             // Arithmetic operators - use wider type
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
-                self.numeric_promotion(left, right)
-            }
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::Pow => self.numeric_promotion(left, right),
             // Bitwise operators
-            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => {
-                Ok(left.clone())
-            }
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => Ok(left.clone()),
         }
     }
 
@@ -911,11 +921,7 @@ impl TypeChecker {
         if target.is_numeric() && source.is_numeric() {
             return Ok(());
         }
-        Err(anyhow!(
-            "Cannot assign {} to {}",
-            source,
-            target
-        ))
+        Err(anyhow!("Cannot assign {} to {}", source, target))
     }
 
     fn expect_bool(&self, ty: &DataType) -> Result<()> {
@@ -1048,7 +1054,11 @@ mod tests {
 
         let ast = parse(source).unwrap();
         let result = check(&ast);
-        assert!(result.is_ok(), "Known host function should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Known host function should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]

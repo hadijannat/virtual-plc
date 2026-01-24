@@ -103,8 +103,11 @@ pub fn copy_outputs_from_wasm(memory: &[u8], data: &mut ProcessData) {
     // Digital outputs
     let do_offset = WASM_DO_OFFSET as usize;
     if memory.len() >= do_offset + 4 {
-        data.digital_outputs[0] =
-            u32::from_le_bytes(memory[do_offset..do_offset + 4].try_into().unwrap_or([0; 4]));
+        data.digital_outputs[0] = u32::from_le_bytes(
+            memory[do_offset..do_offset + 4]
+                .try_into()
+                .unwrap_or([0; 4]),
+        );
     }
 
     // Analog outputs (16 × i16 = 32 bytes)
@@ -112,8 +115,7 @@ pub fn copy_outputs_from_wasm(memory: &[u8], data: &mut ProcessData) {
     for (i, value) in data.analog_outputs.iter_mut().enumerate() {
         let offset = ao_offset + i * 2;
         if memory.len() >= offset + 2 {
-            *value =
-                i16::from_le_bytes(memory[offset..offset + 2].try_into().unwrap_or([0; 2]));
+            *value = i16::from_le_bytes(memory[offset..offset + 2].try_into().unwrap_or([0; 2]));
         }
     }
 }

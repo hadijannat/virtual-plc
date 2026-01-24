@@ -88,7 +88,11 @@ fn host_read_di(mut caller: Caller<'_, HostState>, bit: i32) -> i32 {
         let data = memory.data(&caller);
         let value = read_di_from_memory(data, bit as u32);
         trace!(bit, value, "read_di");
-        if value { 1 } else { 0 }
+        if value {
+            1
+        } else {
+            0
+        }
     } else {
         warn!("read_di called without memory");
         0
@@ -153,7 +157,11 @@ fn host_get_cycle_count(caller: Caller<'_, HostState>) -> i64 {
 fn host_is_first_cycle(caller: Caller<'_, HostState>) -> i32 {
     let first = caller.data().first_cycle;
     trace!(first_cycle = first, "is_first_cycle");
-    if first { 1 } else { 0 }
+    if first {
+        1
+    } else {
+        0
+    }
 }
 
 /// Log a message from the Wasm module.
@@ -185,7 +193,9 @@ fn host_log_message(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) {
     let msg = if let Some(memory) = get_memory(&mut caller) {
         let data = memory.data(&caller);
         if end <= data.len() {
-            std::str::from_utf8(&data[start..end]).ok().map(String::from)
+            std::str::from_utf8(&data[start..end])
+                .ok()
+                .map(String::from)
         } else {
             warn!(
                 ptr,

@@ -56,10 +56,7 @@ fn main() -> Result<()> {
     // Initialize logging
     init_logging(&args.log_level);
 
-    info!(
-        version = env!("CARGO_PKG_VERSION"),
-        "Starting PLC daemon"
-    );
+    info!(version = env!("CARGO_PKG_VERSION"), "Starting PLC daemon");
 
     // Load configuration
     let mut config = load_config(&args)?;
@@ -123,8 +120,9 @@ fn load_config(args: &Args) -> Result<RuntimeConfig> {
         let config_path = PathBuf::from(&env_path);
         if config_path.exists() {
             info!(?config_path, "Loading config from PLC_CONFIG_PATH");
-            return RuntimeConfig::from_file(&config_path)
-                .with_context(|| format!("Failed to load config from PLC_CONFIG_PATH={:?}", env_path));
+            return RuntimeConfig::from_file(&config_path).with_context(|| {
+                format!("Failed to load config from PLC_CONFIG_PATH={:?}", env_path)
+            });
         }
         warn!(
             path = %env_path,
@@ -170,7 +168,9 @@ fn run_daemon(
     let has_wasm = config.wasm_module.is_some();
 
     if has_wasm {
-        let wasm_path = config.wasm_module.as_ref()
+        let wasm_path = config
+            .wasm_module
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("wasm_module required but not configured"))?;
         info!(?wasm_path, "Loading Wasm module");
 
@@ -183,19 +183,33 @@ fn run_daemon(
         let mut scheduler = create_scheduler(engine, config);
 
         // Load the Wasm module
-        scheduler.engine.load_module(&wasm_bytes)
+        scheduler
+            .engine
+            .load_module(&wasm_bytes)
             .with_context(|| "Failed to load Wasm module")?;
 
         diagnostics.state().set_wasm_loaded(true);
 
-        run_scheduler_loop(&mut scheduler, &mut fieldbus, signal_handler, diagnostics, max_cycles)
+        run_scheduler_loop(
+            &mut scheduler,
+            &mut fieldbus,
+            signal_handler,
+            diagnostics,
+            max_cycles,
+        )
     } else {
         info!("No Wasm module configured, using NullEngine");
         let engine = NullEngine::default();
         let mut scheduler = create_scheduler(engine, config);
         diagnostics.state().set_wasm_loaded(false);
 
-        run_scheduler_loop(&mut scheduler, &mut fieldbus, signal_handler, diagnostics, max_cycles)
+        run_scheduler_loop(
+            &mut scheduler,
+            &mut fieldbus,
+            signal_handler,
+            diagnostics,
+            max_cycles,
+        )
     }
 }
 
@@ -238,7 +252,9 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
     max_cycles: u64,
 ) -> Result<()> {
     // Initialize scheduler
-    scheduler.initialize().context("Failed to initialize scheduler")?;
+    scheduler
+        .initialize()
+        .context("Failed to initialize scheduler")?;
     info!("Scheduler initialized");
 
     // Start epoch ticker for Wasm timeout enforcement

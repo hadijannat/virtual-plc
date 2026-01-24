@@ -5,8 +5,8 @@
 use crate::ir::{Instruction, Module as IrModule};
 use anyhow::{anyhow, Result};
 use wasm_encoder::{
-    CodeSection, ExportKind, ExportSection, Function, FunctionSection, ImportSection, Instruction as WasmInstr,
-    MemorySection, MemoryType, Module, TypeSection, ValType,
+    CodeSection, ExportKind, ExportSection, Function, FunctionSection, ImportSection,
+    Instruction as WasmInstr, MemorySection, MemoryType, Module, TypeSection, ValType,
 };
 
 /// Emit WebAssembly binary from an IR module.
@@ -107,11 +107,8 @@ impl WasmEmitter {
 
             // Export step function
             if func.is_step {
-                self.exports.export(
-                    "step",
-                    ExportKind::Func,
-                    self.next_func_idx,
-                );
+                self.exports
+                    .export("step", ExportKind::Func, self.next_func_idx);
             }
 
             self.next_func_idx += 1;
@@ -137,10 +134,14 @@ impl WasmEmitter {
         self.types.ty().function(vec![], vec![]);
 
         // Type 1: (i32) -> i32 for read_di
-        self.types.ty().function(vec![ValType::I32], vec![ValType::I32]);
+        self.types
+            .ty()
+            .function(vec![ValType::I32], vec![ValType::I32]);
 
         // Type 2: (i32, i32) -> () for write_do
-        self.types.ty().function(vec![ValType::I32, ValType::I32], vec![]);
+        self.types
+            .ty()
+            .function(vec![ValType::I32, ValType::I32], vec![]);
 
         // Type 3: () -> i32 for get_cycle_time
         self.types.ty().function(vec![], vec![ValType::I32]);
@@ -149,28 +150,41 @@ impl WasmEmitter {
     fn import_host_functions(&mut self) {
         // Import PLC host functions
         // read_di: (bit: i32) -> i32
-        self.imports.import("plc", "read_di", wasm_encoder::EntityType::Function(1));
-        self.host_funcs.insert("read_di".to_string(), self.next_func_idx);
+        self.imports
+            .import("plc", "read_di", wasm_encoder::EntityType::Function(1));
+        self.host_funcs
+            .insert("read_di".to_string(), self.next_func_idx);
         self.next_func_idx += 1;
 
         // write_do: (bit: i32, value: i32) -> ()
-        self.imports.import("plc", "write_do", wasm_encoder::EntityType::Function(2));
-        self.host_funcs.insert("write_do".to_string(), self.next_func_idx);
+        self.imports
+            .import("plc", "write_do", wasm_encoder::EntityType::Function(2));
+        self.host_funcs
+            .insert("write_do".to_string(), self.next_func_idx);
         self.next_func_idx += 1;
 
         // read_ai: (channel: i32) -> i32
-        self.imports.import("plc", "read_ai", wasm_encoder::EntityType::Function(1));
-        self.host_funcs.insert("read_ai".to_string(), self.next_func_idx);
+        self.imports
+            .import("plc", "read_ai", wasm_encoder::EntityType::Function(1));
+        self.host_funcs
+            .insert("read_ai".to_string(), self.next_func_idx);
         self.next_func_idx += 1;
 
         // write_ao: (channel: i32, value: i32) -> ()
-        self.imports.import("plc", "write_ao", wasm_encoder::EntityType::Function(2));
-        self.host_funcs.insert("write_ao".to_string(), self.next_func_idx);
+        self.imports
+            .import("plc", "write_ao", wasm_encoder::EntityType::Function(2));
+        self.host_funcs
+            .insert("write_ao".to_string(), self.next_func_idx);
         self.next_func_idx += 1;
 
         // get_cycle_time: () -> i32
-        self.imports.import("plc", "get_cycle_time", wasm_encoder::EntityType::Function(3));
-        self.host_funcs.insert("get_cycle_time".to_string(), self.next_func_idx);
+        self.imports.import(
+            "plc",
+            "get_cycle_time",
+            wasm_encoder::EntityType::Function(3),
+        );
+        self.host_funcs
+            .insert("get_cycle_time".to_string(), self.next_func_idx);
         self.next_func_idx += 1;
     }
 

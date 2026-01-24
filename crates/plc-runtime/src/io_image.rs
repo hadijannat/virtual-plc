@@ -59,7 +59,8 @@ pub struct ProcessData {
     /// Analog outputs (16-bit signed values).
     pub analog_outputs: [i16; AO_CHANNELS],
     /// Padding to ensure cache line alignment.
-    _pad: [u8; CACHE_LINE_SIZE - ((DI_WORDS + DO_WORDS) * 4 + (AI_CHANNELS + AO_CHANNELS) * 2) % CACHE_LINE_SIZE],
+    _pad: [u8; CACHE_LINE_SIZE
+        - ((DI_WORDS + DO_WORDS) * 4 + (AI_CHANNELS + AO_CHANNELS) * 2) % CACHE_LINE_SIZE],
 }
 
 impl Default for ProcessData {
@@ -69,7 +70,8 @@ impl Default for ProcessData {
             digital_outputs: [0; DO_WORDS],
             analog_inputs: [0; AI_CHANNELS],
             analog_outputs: [0; AO_CHANNELS],
-            _pad: [0; CACHE_LINE_SIZE - ((DI_WORDS + DO_WORDS) * 4 + (AI_CHANNELS + AO_CHANNELS) * 2) % CACHE_LINE_SIZE],
+            _pad: [0; CACHE_LINE_SIZE
+                - ((DI_WORDS + DO_WORDS) * 4 + (AI_CHANNELS + AO_CHANNELS) * 2) % CACHE_LINE_SIZE],
         }
     }
 }

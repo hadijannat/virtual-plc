@@ -66,8 +66,7 @@ pub fn init_realtime(config: &RealtimeConfig) -> PlcResult<RealtimeStatus> {
 
     let stack_prefaulted = prefault_stack(config.prefault_stack_size);
 
-    let (scheduler_policy, scheduler_priority) =
-        set_scheduler(config.policy, config.priority)?;
+    let (scheduler_policy, scheduler_priority) = set_scheduler(config.policy, config.priority)?;
 
     let cpu_affinity = set_cpu_affinity(&config.cpu_affinity)?;
 
@@ -202,7 +201,7 @@ fn set_scheduler(
     policy: SchedPolicy,
     priority: u8,
 ) -> PlcResult<(Option<SchedPolicy>, Option<u8>)> {
-    use nix::sched::{sched_setscheduler, CpuSet, sched_setaffinity};
+    use nix::sched::{sched_setaffinity, sched_setscheduler, CpuSet};
     use nix::unistd::Pid;
 
     let linux_policy = match policy {
@@ -266,8 +265,7 @@ fn set_scheduler(
 ) -> PlcResult<(Option<SchedPolicy>, Option<u8>)> {
     warn!(
         ?policy,
-        priority,
-        "Real-time scheduling not available on this platform"
+        priority, "Real-time scheduling not available on this platform"
     );
     Ok((None, None))
 }
@@ -295,9 +293,9 @@ fn set_cpu_affinity(affinity: &CpuAffinity) -> PlcResult<Option<Vec<usize>>> {
 
     let mut cpu_set = CpuSet::new();
     for &cpu in &cpus {
-        cpu_set.set(cpu).map_err(|e| {
-            PlcError::Config(format!("Invalid CPU index {cpu}: {e}"))
-        })?;
+        cpu_set
+            .set(cpu)
+            .map_err(|e| PlcError::Config(format!("Invalid CPU index {cpu}: {e}")))?;
     }
 
     match sched_setaffinity(Pid::from_raw(0), &cpu_set) {
@@ -382,7 +380,10 @@ impl RtCapabilities {
 
     /// Check if memory locking is likely to succeed.
     pub fn can_lock_memory(&self) -> bool {
-        self.is_root || self.memlock_limit.map_or(false, |l| l == libc::RLIM_INFINITY)
+        self.is_root
+            || self
+                .memlock_limit
+                .map_or(false, |l| l == libc::RLIM_INFINITY)
     }
 }
 
@@ -421,9 +422,7 @@ pub fn validate_rt_capabilities(config: &RealtimeConfig) -> PlcResult<()> {
         issues.push(format!(
             "Cannot use RT scheduling (SCHED_{:?}): RLIMIT_RTPRIO={:?}, is_root={}. \
              Grant CAP_SYS_NICE capability or set RLIMIT_RTPRIO > 0.",
-            config.policy,
-            caps.rtprio_limit,
-            caps.is_root
+            config.policy, caps.rtprio_limit, caps.is_root
         ));
     }
 

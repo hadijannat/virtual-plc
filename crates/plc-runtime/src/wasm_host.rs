@@ -459,10 +459,7 @@ impl LogicEngine for WasmtimeHost {
         // Advance cycle
         self.store.data_mut().advance_cycle();
 
-        trace!(
-            cycle = self.store.data().cycle_count,
-            "Step completed"
-        );
+        trace!(cycle = self.store.data().cycle_count, "Step completed");
 
         Ok(outputs)
     }

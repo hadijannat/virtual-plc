@@ -1,0 +1,72 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+# Root package for workspace-level tests
+[package]
+name = "virtual-plc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[test]]
+name = "acceptance_tests"
+path = "tests/acceptance_tests.rs"
+
+[dev-dependencies]
+wasmparser = { workspace = true }
+libc = { workspace = true }
+plc-compiler = { path = "crates/plc-compiler" }
+plc-runtime = { path = "crates/plc-runtime" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Your Org <devnull@example.com>"]
+
+[workspace.dependencies]
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Logging / tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Time utilities
+humantime = "2"
+
+# Real-time / low-level
+libc = "0.2"
+nix = { version = "0.29", features = ["sched", "mman", "signal", "time"] }
+crossbeam-utils = "0.8"
+
+# Wasm runtime
+wasmtime = "17"
+wat = "1"
+
+# Compiler tools
+pest = "2.7"
+pest_derive = "2.7"
+wasm-encoder = "0.220"
+wasmparser = "0.220"
+
+# Optional (control-plane)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

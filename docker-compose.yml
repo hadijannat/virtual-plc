@@ -1,0 +1,14 @@
+services:
+  vplc:
+    image: vplc:local
+    build: .
+    network_mode: "host"
+    privileged: true
+    ulimits:
+      rtprio: 99
+      memlock: -1
+    cap_add:
+      - SYS_NICE
+      - IPC_LOCK
+      - NET_RAW
+    # cpuset: "2,3"

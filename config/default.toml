@@ -1,0 +1,125 @@
+# Virtual PLC Default Configuration
+#
+# This file provides sensible defaults for development and testing.
+# For production deployments, adjust settings based on your hardware
+# and real-time requirements.
+
+# ============================================================================
+# Scan Cycle Settings
+# ============================================================================
+
+# Main scan cycle time. This determines how often the PLC executes:
+#   1. Read inputs from fieldbus
+#   2. Execute Wasm logic module
+#   3. Write outputs to fieldbus
+cycle_time = "1ms"
+
+# Watchdog timeout - typically 2-3x the cycle time.
+# If a cycle takes longer than this, the runtime enters fault mode.
+watchdog_timeout = "3ms"
+
+# Maximum allowed cycle overrun before triggering a fault.
+# Small overruns may be tolerated; this is the hard limit.
+max_overrun = "500us"
+
+# Path to the compiled Wasm logic module.
+# Uncomment and set to your compiled PLC program.
+# wasm_module = "programs/main.wasm"
+
+# ============================================================================
+# Real-Time Configuration
+# ============================================================================
+
+[realtime]
+# Enable real-time scheduling. Requires:
+#   - Linux with PREEMPT_RT kernel (recommended)
+#   - CAP_SYS_NICE capability or root privileges
+#   - Properly tuned kernel parameters
+enabled = false
+
+# Scheduler policy: "fifo", "rr", or "other"
+#   - fifo: First-in-first-out, highest priority runs until complete
+#   - rr: Round-robin with time slicing among same-priority tasks
+#   - other: Normal time-sharing (non-real-time)
+policy = "fifo"
+
+# Real-time priority (1-99 for fifo/rr policies).
+# Higher values = higher priority. Use 90+ for PLC tasks.
+# Leave headroom (don't use 99) for kernel threads.
+priority = 90
+
+# CPU affinity - pin the RT thread to specific CPU core(s).
+# Options:
+#   - null or omit: Let OS choose (not recommended for RT)
+#   - integer: Pin to single core (e.g., cpu_affinity = 2)
+#   - array: Pin to multiple cores (e.g., cpu_affinity = [2, 3])
+# cpu_affinity = 2
+
+# Lock all memory pages to prevent page faults during execution.
+# Essential for deterministic real-time behavior.
+lock_memory = true
+
+# Stack size to pre-fault (in bytes).
+# Pre-faulting ensures stack pages are resident before RT execution.
+prefault_stack_size = 8388608  # 8 MiB
+
+# ============================================================================
+# Fieldbus Configuration
+# ============================================================================
+
+[fieldbus]
+# Fieldbus driver type: "simulated", "ethercat", or "modbustcp"
+#   - simulated: No hardware, useful for testing logic
+#   - ethercat: EtherCAT via SOEM (requires network interface)
+#   - modbustcp: Modbus TCP client
+driver = "simulated"
+
+# EtherCAT configuration (used when driver = "ethercat")
+[fieldbus.ethercat]
+# Network interface for EtherCAT communication.
+# Must be a dedicated interface, not shared with other traffic.
+interface = "eth0"
+
+# Enable Distributed Clocks (DC) for synchronized slave outputs.
+# Required for motion control and precise timing applications.
+dc_enabled = true
+
+# DC sync0 cycle time - should match the main cycle_time.
+dc_sync0_cycle = "1ms"
+
+# Path to ESI (EtherCAT Slave Information) files directory.
+# Provides detailed slave configuration data.
+# esi_path = "/etc/plc/esi"
+
+# Modbus TCP configuration (used when driver = "modbustcp")
+[fieldbus.modbus]
+# Modbus TCP server address (host:port).
+address = "127.0.0.1:502"
+
+# Modbus unit identifier (slave ID).
+unit_id = 1
+
+# Connection/response timeout.
+timeout = "1s"
+
+# ============================================================================
+# Metrics and Diagnostics
+# ============================================================================
+
+[metrics]
+# Enable cycle time metrics collection.
+enabled = true
+
+# Size of the latency histogram ring buffer.
+# Larger values = more historical data for percentile calculations.
+histogram_size = 10000
+
+# Percentiles to compute from latency data.
+percentiles = [50.0, 90.0, 99.0, 99.9, 99.99]
+
+# Export metrics via HTTP endpoint.
+# Useful for monitoring with Prometheus or similar tools.
+http_export = false
+
+# HTTP metrics endpoint port (when http_export = true).
+http_port = 9090

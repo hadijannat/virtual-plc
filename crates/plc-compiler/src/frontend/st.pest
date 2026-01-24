@@ -1,0 +1,231 @@
+// IEC 61131-3 Structured Text Grammar
+// Case-insensitive keywords handled via ^"keyword" syntax
+
+// Whitespace and comments
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ line_comment | block_comment }
+line_comment = _{ "//" ~ (!"\n" ~ ANY)* }
+block_comment = _{ "(*" ~ (!"*)" ~ ANY)* ~ "*)" }
+
+// Entry point
+compilation_unit = { SOI ~ pou* ~ EOI }
+
+// Program Organization Units
+pou = { program | function_block | function }
+
+program = {
+    ^"PROGRAM" ~ identifier ~
+    var_block* ~
+    statement_list ~
+    ^"END_PROGRAM"
+}
+
+function_block = {
+    ^"FUNCTION_BLOCK" ~ identifier ~
+    var_block* ~
+    statement_list ~
+    ^"END_FUNCTION_BLOCK"
+}
+
+function = {
+    ^"FUNCTION" ~ identifier ~ ":" ~ data_type ~
+    var_block* ~
+    statement_list ~
+    ^"END_FUNCTION"
+}
+
+// Variable declarations
+var_block = {
+    var_block_start ~ var_modifier* ~
+    var_decl* ~
+    ^"END_VAR"
+}
+
+var_block_start = {
+    ^"VAR_INPUT" | ^"VAR_OUTPUT" | ^"VAR_IN_OUT" |
+    ^"VAR_EXTERNAL" | ^"VAR_GLOBAL" | ^"VAR_TEMP" | ^"VAR"
+}
+
+var_modifier = { ^"RETAIN" | ^"CONSTANT" }
+
+var_decl = {
+    identifier_list ~ ":" ~ data_type ~ (":=" ~ expression)? ~ ";"
+}
+
+identifier_list = { identifier ~ ("," ~ identifier)* }
+
+// Data types
+data_type = {
+    array_type |
+    string_type |
+    elementary_type |
+    identifier  // User-defined type
+}
+
+elementary_type = {
+    ^"BOOL" | ^"SINT" | ^"INT" | ^"DINT" | ^"LINT" |
+    ^"USINT" | ^"UINT" | ^"UDINT" | ^"ULINT" |
+    ^"REAL" | ^"LREAL" |
+    ^"TIME" | ^"DATE" | ^"TIME_OF_DAY" | ^"TOD" | ^"DATE_AND_TIME" | ^"DT" |
+    ^"BYTE" | ^"WORD" | ^"DWORD" | ^"LWORD"
+}
+
+string_type = {
+    (^"STRING" | ^"WSTRING") ~ ("[" ~ integer_literal ~ "]")?
+}
+
+array_type = {
+    ^"ARRAY" ~ "[" ~ subrange ~ "]" ~ ^"OF" ~ data_type
+}
+
+subrange = { expression ~ ".." ~ expression }
+
+// Statements
+statement_list = { statement* }
+
+statement = {
+    (assignment_stmt |
+    if_stmt |
+    case_stmt |
+    for_stmt |
+    while_stmt |
+    repeat_stmt |
+    exit_stmt |
+    continue_stmt |
+    return_stmt |
+    call_stmt |
+    empty_stmt) ~ ";"?
+}
+
+assignment_stmt = { variable ~ ":=" ~ expression }
+
+if_stmt = {
+    ^"IF" ~ expression ~ ^"THEN" ~
+    statement_list ~
+    elsif_branch* ~
+    else_branch? ~
+    ^"END_IF"
+}
+
+elsif_branch = { ^"ELSIF" ~ expression ~ ^"THEN" ~ statement_list }
+else_branch = { ^"ELSE" ~ statement_list }
+
+case_stmt = {
+    ^"CASE" ~ expression ~ ^"OF" ~
+    case_branch+ ~
+    else_branch? ~
+    ^"END_CASE"
+}
+
+case_branch = { case_value_list ~ ":" ~ statement_list }
+case_value_list = { case_value ~ ("," ~ case_value)* }
+case_value = { expression ~ (".." ~ expression)? }
+
+for_stmt = {
+    ^"FOR" ~ identifier ~ ":=" ~ expression ~
+    ^"TO" ~ expression ~
+    (^"BY" ~ expression)? ~
+    ^"DO" ~ statement_list ~
+    ^"END_FOR"
+}
+
+while_stmt = {
+    ^"WHILE" ~ expression ~ ^"DO" ~
+    statement_list ~
+    ^"END_WHILE"
+}
+
+repeat_stmt = {
+    ^"REPEAT" ~
+    statement_list ~
+    ^"UNTIL" ~ expression ~
+    ^"END_REPEAT"
+}
+
+exit_stmt = { ^"EXIT" }
+continue_stmt = { ^"CONTINUE" }
+return_stmt = { ^"RETURN" ~ expression? }
+
+call_stmt = { identifier ~ "(" ~ argument_list? ~ ")" }
+
+empty_stmt = { ";" }
+
+// Expressions - with precedence handled by pest's climbing
+expression = { or_expr }
+
+or_expr = { xor_expr ~ (or_op ~ xor_expr)* }
+or_op = { ^"OR" }
+
+xor_expr = { and_expr ~ (xor_op ~ and_expr)* }
+xor_op = { ^"XOR" }
+
+and_expr = { comparison ~ (and_op ~ comparison)* }
+and_op = { ^"AND" | "&" }
+
+comparison = { add_expr ~ (comparison_op ~ add_expr)* }
+comparison_op = { "<>" | "<=" | ">=" | "<" | ">" | "=" }
+
+add_expr = { mul_expr ~ (add_op ~ mul_expr)* }
+add_op = { "+" | "-" }
+
+mul_expr = { power_expr ~ (mul_op ~ power_expr)* }
+mul_op = { "*" | "/" | ^"MOD" }
+
+power_expr = { unary_expr ~ ("**" ~ unary_expr)* }
+
+unary_expr = { unary_op? ~ primary_expr }
+unary_op = { "-" | ^"NOT" }
+
+primary_expr = {
+    "(" ~ expression ~ ")" |
+    function_call |
+    literal |
+    variable
+}
+
+function_call = { identifier ~ "(" ~ argument_list? ~ ")" }
+
+argument_list = { argument ~ ("," ~ argument)* }
+argument = { (identifier ~ ":=")? ~ expression }
+
+variable = { identifier ~ (array_index | field_access)* }
+array_index = { "[" ~ expression ~ "]" }
+field_access = { "." ~ identifier }
+
+// Literals
+literal = {
+    time_literal |
+    real_literal |
+    integer_literal |
+    string_literal |
+    bool_literal
+}
+
+bool_literal = { ^"TRUE" | ^"FALSE" }
+
+integer_literal = @{
+    ("2#" ~ ('0'..'1' | "_")+) |          // Binary
+    ("8#" ~ ('0'..'7' | "_")+) |          // Octal
+    ("16#" ~ (ASCII_HEX_DIGIT | "_")+) |  // Hex
+    (ASCII_DIGIT ~ (ASCII_DIGIT | "_")*)  // Decimal
+}
+
+real_literal = @{
+    ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+}
+
+string_literal = @{
+    "'" ~ (!"'" ~ ANY)* ~ "'" |
+    "\"" ~ (!"\"" ~ ANY)* ~ "\""
+}
+
+time_literal = @{
+    (^"T#" | ^"TIME#") ~ time_value
+}
+
+time_value = @{
+    (ASCII_DIGIT+ ~ ("d" | "h" | "m" | "s" | "ms" | "us" | "ns"))+
+}
+
+// Identifiers
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }

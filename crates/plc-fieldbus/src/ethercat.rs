@@ -511,10 +511,10 @@ impl EthercatMaster {
                     "WKC error threshold exceeded - fieldbus fault"
                 );
                 self.state = MasterState::Fault;
-                return Err(PlcError::FieldbusError(format!(
-                    "WKC error threshold exceeded: {} consecutive errors (threshold: {})",
-                    self.consecutive_wkc_errors, threshold
-                )));
+                return Err(PlcError::WkcThresholdExceeded {
+                    consecutive: self.consecutive_wkc_errors,
+                    threshold,
+                });
             }
         } else {
             // Reset consecutive error count on successful exchange

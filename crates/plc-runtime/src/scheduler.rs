@@ -8,6 +8,7 @@
 //!
 //! Uses `clock_nanosleep` with `TIMER_ABSTIME` for jitter-free timing.
 
+use crate::fault_recorder::{FaultReason, FaultRecorder};
 use crate::io_image::{IoImage, ProcessData};
 use crate::wasm_host::LogicEngine;
 use crate::watchdog::Watchdog;
@@ -30,6 +31,9 @@ pub struct CyclePhaseTimings {
     pub logic_exec: Duration,
     /// Time spent writing outputs to I/O image.
     pub io_write: Duration,
+    /// Time spent in fieldbus exchange (if measured externally).
+    /// This is typically measured by the daemon, not the scheduler.
+    pub fieldbus_exchange: Duration,
     /// Total cycle execution time (should equal io_read + logic_exec + io_write + overhead).
     pub total: Duration,
 }
@@ -41,13 +45,14 @@ impl CyclePhaseTimings {
         self.logic_exec >= self.io_read && self.logic_exec >= self.io_write
     }
 
-    /// Returns the overhead time not accounted for by the three phases.
+    /// Returns the overhead time not accounted for by the measured phases.
     #[must_use]
     pub fn overhead(&self) -> Duration {
         self.total
             .saturating_sub(self.io_read)
             .saturating_sub(self.logic_exec)
             .saturating_sub(self.io_write)
+            .saturating_sub(self.fieldbus_exchange)
     }
 }
 
@@ -90,12 +95,17 @@ pub struct Scheduler<E: LogicEngine> {
     fault_policy: FaultPolicyConfig,
     /// Last known output values (for HoldLast safe output policy).
     last_outputs: ProcessData,
+    /// Fault frame recorder for postmortem diagnosis.
+    fault_recorder: FaultRecorder,
 }
 
 impl<E: LogicEngine> Scheduler<E> {
     /// Create a new scheduler with the given logic engine and configuration.
     pub fn new(engine: E, config: &RuntimeConfig) -> Self {
         let metrics = CycleMetrics::new(config.metrics.histogram_size, config.cycle_time);
+        let fault_recorder = FaultRecorder::new(
+            config.fault_policy.fault_frame_count.unwrap_or(64),
+        );
 
         Self {
             io: IoImage::new(),
@@ -109,6 +119,7 @@ impl<E: LogicEngine> Scheduler<E> {
             watchdog: None,
             fault_policy: config.fault_policy.clone(),
             last_outputs: ProcessData::default(),
+            fault_recorder,
         }
     }
 
@@ -135,6 +146,11 @@ impl<E: LogicEngine> Scheduler<E> {
     /// Get total cycle count.
     pub fn cycle_count(&self) -> u64 {
         self.cycle_count
+    }
+
+    /// Get the fault recorder for postmortem analysis.
+    pub fn fault_recorder(&self) -> &FaultRecorder {
+        &self.fault_recorder
     }
 
     /// Initialize the scheduler and logic engine.
@@ -214,6 +230,11 @@ impl<E: LogicEngine> Scheduler<E> {
 
         // Check if watchdog has triggered (RT loop was too slow)
         if self.watchdog_triggered() {
+            self.fault_recorder.record_fault(
+                self.cycle_count,
+                FaultReason::WatchdogTimeout,
+                CyclePhaseTimings::default(),
+            );
             self.enter_fault("Watchdog timeout detected")?;
             return Err(PlcError::Fault("Watchdog timeout".into()));
         }
@@ -235,6 +256,19 @@ impl<E: LogicEngine> Scheduler<E> {
         let outputs = match self.engine.step(&inputs) {
             Ok(outputs) => outputs,
             Err(e) => {
+                let logic_exec_time = logic_start.elapsed();
+                let phase_timings = CyclePhaseTimings {
+                    io_read: io_read_time,
+                    logic_exec: logic_exec_time,
+                    io_write: Duration::ZERO,
+                    fieldbus_exchange: Duration::ZERO,
+                    total: cycle_start.elapsed(),
+                };
+                self.fault_recorder.record_fault(
+                    self.cycle_count,
+                    FaultReason::LogicError,
+                    phase_timings,
+                );
                 self.enter_fault(&format!("Logic engine step failed: {e}"))?;
                 return Err(e);
             }
@@ -259,11 +293,18 @@ impl<E: LogicEngine> Scheduler<E> {
             io_read: io_read_time,
             logic_exec: logic_exec_time,
             io_write: io_write_time,
+            fieldbus_exchange: Duration::ZERO, // Measured externally by daemon
             total: execution_time,
         };
         self.cycle_count += 1;
 
-        // 5. Record metrics
+        // 5. Record fault frame for this cycle (for postmortem analysis)
+        if let Some(frame) = self.fault_recorder.record_cycle(self.cycle_count, phase_timings) {
+            frame.set_inputs(&inputs);
+            frame.set_outputs(&outputs);
+        }
+
+        // 6. Record metrics
         self.metrics.record(execution_time);
 
         // 6. Check for overrun and apply fault policy
@@ -279,6 +320,11 @@ impl<E: LogicEngine> Scheduler<E> {
                             deadline_us = self.cycle_period.as_micros(),
                             overrun_us = overrun_amount.as_micros(),
                             "Critical cycle overrun - entering fault state"
+                        );
+                        self.fault_recorder.record_fault(
+                            self.cycle_count,
+                            FaultReason::CycleOverrun,
+                            phase_timings,
                         );
                         self.enter_fault("Critical cycle overrun")?;
                         return Err(PlcError::CycleOverrun {
@@ -732,6 +778,7 @@ mod tests {
             io_read: Duration::from_micros(10),
             logic_exec: Duration::from_micros(100),
             io_write: Duration::from_micros(10),
+            fieldbus_exchange: Duration::ZERO,
             total: Duration::from_micros(125),
         };
         assert!(timings.logic_dominant());
@@ -742,6 +789,7 @@ mod tests {
             io_read: Duration::from_micros(100),
             logic_exec: Duration::from_micros(10),
             io_write: Duration::from_micros(10),
+            fieldbus_exchange: Duration::ZERO,
             total: Duration::from_micros(120),
         };
         assert!(!timings2.logic_dominant());

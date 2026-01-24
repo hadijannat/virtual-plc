@@ -144,6 +144,9 @@ pub struct FaultPolicyConfig {
     pub fault_latch: bool,
     /// Fieldbus communication failure handling.
     pub fieldbus_failure: FieldbusFailurePolicy,
+    /// Number of fault frames to retain for postmortem diagnosis.
+    /// Defaults to 64 if not specified.
+    pub fault_frame_count: Option<usize>,
 }
 
 /// Scheduler policy for real-time threads.

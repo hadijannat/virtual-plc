@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tracing::{debug, info, trace, warn};
-use wasmtime::{Config, Engine, Instance, Linker, Memory, Module, OptLevel, Store, TypedFunc};
+use wasmtime::{Config, Engine, Instance, Linker, Memory, Module, OptLevel, Store, Trap, TypedFunc};
 
 /// Logic engine trait for swappable Wasm runtimes.
 ///
@@ -228,8 +228,9 @@ impl WasmtimeHost {
         // Configure Wasm features for PLC use
         config.wasm_threads(false);
         config.wasm_simd(wasm_config.enable_simd);
-        // Relaxed SIMD requires SIMD to be enabled
-        config.wasm_relaxed_simd(wasm_config.enable_simd);
+        // Relaxed SIMD requires SIMD to be enabled, but must be disabled in
+        // deterministic mode as it allows implementation-specific behavior
+        config.wasm_relaxed_simd(wasm_config.enable_simd && !wasm_config.deterministic);
 
         // Apply deterministic mode settings if enabled
         if wasm_config.deterministic {
@@ -346,6 +347,13 @@ impl WasmtimeHost {
             .as_ref()
             .ok_or_else(|| anyhow!("No module loaded"))?;
 
+        // Ensure fuel is available before instantiation (start functions may run)
+        if self.use_fuel {
+            self.store
+                .set_fuel(self.fuel_per_cycle)
+                .map_err(|e| anyhow!("Failed to set fuel: {}", e))?;
+        }
+
         // Instantiate
         let instance = self
             .linker
@@ -407,6 +415,19 @@ impl WasmtimeHost {
         self.store
             .set_epoch_deadline(current + self.max_epochs_per_cycle);
     }
+
+    /// Ensure fuel is set if fuel-based budgeting is enabled.
+    ///
+    /// This must be called before any Wasm execution (init, step, fault)
+    /// to prevent immediate traps when the store starts with 0 fuel.
+    fn ensure_fuel(&mut self) -> PlcResult<()> {
+        if self.use_fuel {
+            self.store
+                .set_fuel(self.fuel_per_cycle)
+                .map_err(|e| PlcError::Config(format!("Failed to set fuel: {e}")))?;
+        }
+        Ok(())
+    }
 }
 
 impl LogicEngine for WasmtimeHost {
@@ -425,6 +446,7 @@ impl LogicEngine for WasmtimeHost {
         let has_init = self.init_fn.is_some();
         if has_init {
             self.set_epoch_deadline();
+            self.ensure_fuel()?;
             // Get reference after set_epoch_deadline
             if let Some(init_fn) = &self.init_fn {
                 init_fn
@@ -497,16 +519,16 @@ impl LogicEngine for WasmtimeHost {
         // Call step function
         if let Some(step_fn) = &self.step_fn {
             step_fn.call(&mut self.store, ()).map_err(|e| {
-                // Check if this was an out-of-fuel error (instruction budget exceeded)
-                let msg = e.to_string();
-                if msg.contains("fuel") || msg.contains("Fuel") {
-                    PlcError::CycleOverrun {
-                        expected_ns: self.cycle_time_ns,
-                        actual_ns: 0, // Unknown - fuel exhausted before completion
+                // Check for out-of-fuel trap using Wasmtime's Trap enum
+                if let Some(trap) = e.downcast_ref::<Trap>() {
+                    if matches!(trap, Trap::OutOfFuel) {
+                        return PlcError::CycleOverrun {
+                            expected_ns: self.cycle_time_ns,
+                            actual_ns: 0, // Unknown - fuel exhausted before completion
+                        };
                     }
-                } else {
-                    PlcError::WasmTrap(format!("step() failed: {e}"))
                 }
+                PlcError::WasmTrap(format!("step() failed: {e}"))
             })?;
         }
 
@@ -532,6 +554,8 @@ impl LogicEngine for WasmtimeHost {
         let has_fault = self.fault_fn.is_some();
         if has_fault {
             self.set_epoch_deadline();
+            // Best effort - we're already in fault mode, don't fail on fuel error
+            let _ = self.ensure_fuel();
             if let Some(fault_fn) = &self.fault_fn {
                 fault_fn
                     .call(&mut self.store, ())

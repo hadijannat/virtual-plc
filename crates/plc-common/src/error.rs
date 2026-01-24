@@ -28,6 +28,15 @@ pub enum PlcError {
     #[error("fieldbus error: {0}")]
     FieldbusError(String),
 
+    /// EtherCAT working counter threshold exceeded.
+    #[error("WKC threshold exceeded: {consecutive} consecutive errors (threshold: {threshold})")]
+    WkcThresholdExceeded {
+        /// Number of consecutive WKC errors.
+        consecutive: u32,
+        /// Configured threshold.
+        threshold: u32,
+    },
+
     /// WebAssembly trap or sandbox violation.
     #[error("wasm trap: {0}")]
     WasmTrap(String),

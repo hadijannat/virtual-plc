@@ -13,6 +13,7 @@
 
 use crate::io_image::ProcessData;
 use crate::scheduler::CyclePhaseTimings;
+use static_assertions::const_assert;
 use std::time::Duration;
 
 /// Default number of fault frames to retain.
@@ -21,6 +22,12 @@ pub const DEFAULT_FAULT_FRAME_COUNT: usize = 64;
 /// Maximum size of I/O snapshot in bytes.
 /// Sized to hold ProcessData's digital and analog I/O.
 pub const IO_SNAPSHOT_SIZE: usize = 256;
+
+// Compile-time check that IO_SNAPSHOT_SIZE can hold ProcessData's I/O fields.
+// ProcessData has: digital_inputs[1] + digital_outputs[1] (8 bytes) +
+//                  analog_inputs[16] + analog_outputs[16] (64 bytes) = 72 bytes minimum
+// We use 256 to allow for future expansion.
+const_assert!(IO_SNAPSHOT_SIZE >= std::mem::size_of::<ProcessData>());
 
 /// Reason for entering fault state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,33 +248,61 @@ impl FaultRecorder {
 
     /// Record a fault and freeze the recorder.
     ///
-    /// This marks the current frame as the fault frame and prevents
-    /// further recording to preserve the fault context.
-    pub fn record_fault(&mut self, cycle: u64, reason: FaultReason) {
+    /// Creates a NEW dedicated fault frame with the given cycle data,
+    /// ensuring the fault is recorded with the correct cycle number and timing.
+    /// This prevents the issue where a fault would be attributed to the
+    /// previous cycle's frame.
+    pub fn record_fault(
+        &mut self,
+        cycle: u64,
+        reason: FaultReason,
+        phase_timings: CyclePhaseTimings,
+    ) {
         if self.frozen {
             return;
         }
 
-        // If we have frames, mark the most recent one as the fault frame
-        if self.frame_count > 0 {
-            let last_idx = if self.write_pos == 0 {
-                self.frames.len() - 1
-            } else {
-                self.write_pos - 1
-            };
+        // Create a dedicated fault frame with current cycle data
+        let timestamp_ns = self.start_time.elapsed().as_nanos() as u64;
+        let idx = self.write_pos;
 
-            self.frames[last_idx].set_fault(reason);
-            self.fault_frame_index = Some(last_idx);
-        } else {
-            // Record a minimal fault frame if no frames exist
-            let timestamp_ns = self.start_time.elapsed().as_nanos() as u64;
-            let mut frame = FaultFrame::new(cycle, timestamp_ns, CyclePhaseTimings::default());
-            frame.set_fault(reason);
-            self.frames[0] = frame;
-            self.frame_count = 1;
-            self.fault_frame_index = Some(0);
+        self.frames[idx] = FaultFrame::new(cycle, timestamp_ns, phase_timings);
+        self.frames[idx].set_fault(reason);
+        self.fault_frame_index = Some(idx);
+
+        self.write_pos = (self.write_pos + 1) % self.frames.len();
+        self.frame_count = self.frame_count.saturating_add(1);
+        self.frozen = true;
+    }
+
+    /// Record a fault with I/O data and freeze the recorder.
+    ///
+    /// Like `record_fault`, but also captures input and output snapshots
+    /// for complete postmortem analysis.
+    pub fn record_fault_with_io(
+        &mut self,
+        cycle: u64,
+        reason: FaultReason,
+        phase_timings: CyclePhaseTimings,
+        inputs: &ProcessData,
+        outputs: &ProcessData,
+    ) {
+        if self.frozen {
+            return;
         }
 
+        // Create a dedicated fault frame with current cycle data
+        let timestamp_ns = self.start_time.elapsed().as_nanos() as u64;
+        let idx = self.write_pos;
+
+        self.frames[idx] = FaultFrame::new(cycle, timestamp_ns, phase_timings);
+        self.frames[idx].set_inputs(inputs);
+        self.frames[idx].set_outputs(outputs);
+        self.frames[idx].set_fault(reason);
+        self.fault_frame_index = Some(idx);
+
+        self.write_pos = (self.write_pos + 1) % self.frames.len();
+        self.frame_count = self.frame_count.saturating_add(1);
         self.frozen = true;
     }
 
@@ -398,6 +433,7 @@ mod tests {
             io_read: Duration::from_micros(10),
             logic_exec: Duration::from_micros(100),
             io_write: Duration::from_micros(10),
+            fieldbus_exchange: Duration::ZERO,
             total: Duration::from_micros(120),
         };
 
@@ -437,12 +473,14 @@ mod tests {
             recorder.record_cycle(i, timings);
         }
 
-        // Record fault
-        recorder.record_fault(5, FaultReason::CycleOverrun);
+        // Record fault - now creates a new frame with the fault cycle's data
+        recorder.record_fault(5, FaultReason::CycleOverrun, timings);
 
         assert!(recorder.is_frozen());
         assert!(recorder.fault_frame().is_some());
-        assert_eq!(recorder.fault_frame().unwrap().fault_reason, FaultReason::CycleOverrun);
+        let fault_frame = recorder.fault_frame().unwrap();
+        assert_eq!(fault_frame.fault_reason, FaultReason::CycleOverrun);
+        assert_eq!(fault_frame.cycle, 5); // Verify correct cycle number
 
         // Further recording should fail
         assert!(recorder.record_cycle(6, timings).is_none());
@@ -455,11 +493,12 @@ mod tests {
             io_read: Duration::from_micros(10),
             logic_exec: Duration::from_micros(100),
             io_write: Duration::from_micros(10),
+            fieldbus_exchange: Duration::ZERO,
             total: Duration::from_micros(1200), // Overrun
         };
 
-        recorder.record_cycle(42, timings);
-        recorder.record_fault(42, FaultReason::CycleOverrun);
+        recorder.record_cycle(41, timings); // Previous cycle
+        recorder.record_fault(42, FaultReason::CycleOverrun, timings);
 
         let summary = recorder.fault_summary().unwrap();
         assert_eq!(summary.cycle, 42);
@@ -489,7 +528,7 @@ mod tests {
         for i in 0..5 {
             recorder.record_cycle(i, timings);
         }
-        recorder.record_fault(5, FaultReason::WasmTrap);
+        recorder.record_fault(5, FaultReason::WasmTrap, timings);
 
         assert!(recorder.is_frozen());
 

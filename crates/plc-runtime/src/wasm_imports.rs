@@ -75,14 +75,29 @@ impl HostState {
     }
 
     /// Create a new host state with the given cycle time and resource limits.
+    ///
+    /// If `max_memory_bytes` or `max_table_elements` is 0, it is treated as unlimited
+    /// (using `usize::MAX` / `u32::MAX` respectively).
     pub fn with_limits(
         cycle_time_ns: u64,
         max_memory_bytes: usize,
         max_table_elements: u32,
     ) -> Self {
+        // Treat 0 as unlimited (usize::MAX for memory, u32::MAX for tables)
+        let effective_memory = if max_memory_bytes == 0 {
+            usize::MAX
+        } else {
+            max_memory_bytes
+        };
+        let effective_tables = if max_table_elements == 0 {
+            u32::MAX
+        } else {
+            max_table_elements
+        };
+
         let limits = StoreLimitsBuilder::new()
-            .memory_size(max_memory_bytes)
-            .table_elements(max_table_elements)
+            .memory_size(effective_memory)
+            .table_elements(effective_tables)
             .instances(1) // Only allow a single instance
             .tables(10) // Reasonable limit for indirect function tables
             .memories(1) // Wasm linear memory (typically just one)

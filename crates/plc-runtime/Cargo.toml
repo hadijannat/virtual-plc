@@ -14,6 +14,7 @@ nix.workspace = true
 crossbeam-utils.workspace = true
 wasmtime.workspace = true
 wat.workspace = true
+static_assertions = "1.1"
 plc-common = { path = "../plc-common" }
 
 [lints.rust]

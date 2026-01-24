@@ -319,8 +319,20 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
 
             // Perform fieldbus exchange
             if let Err(e) = fieldbus.exchange() {
+                // Check for immediate fault conditions (e.g., WKC threshold exceeded)
+                if matches!(e, plc_common::error::PlcError::WkcThresholdExceeded { .. }) {
+                    error!(error = %e, "WKC threshold exceeded - immediate fault");
+                    diagnostics.state().set_fieldbus_connected(false);
+                    if let Err(fe) = scheduler.enter_fault("WKC threshold exceeded") {
+                        warn!("Failed to enter fault state: {}", fe);
+                    }
+                    signal_handler.request_shutdown();
+                    break;
+                }
+
                 consecutive_fb_failures += 1;
                 in_failure_streak = true;
+                recovery_cycles_remaining = 0; // Reset grace on any failure
                 error!(
                     error = %e,
                     consecutive_failures = consecutive_fb_failures,

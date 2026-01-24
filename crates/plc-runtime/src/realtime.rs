@@ -327,10 +327,10 @@ fn set_cpu_affinity(affinity: &CpuAffinity) -> PlcResult<Option<Vec<usize>>> {
 pub fn check_rt_capabilities() -> RtCapabilities {
     use std::fs;
 
-    let mut caps = RtCapabilities::default();
-
-    // Check if we're root
-    caps.is_root = unsafe { libc::geteuid() } == 0;
+    let mut caps = RtCapabilities {
+        is_root: unsafe { libc::geteuid() } == 0,
+        ..Default::default()
+    };
 
     // Check RLIMIT_RTPRIO
     let mut rlim = libc::rlimit {
@@ -338,7 +338,7 @@ pub fn check_rt_capabilities() -> RtCapabilities {
         rlim_max: 0,
     };
     if unsafe { libc::getrlimit(libc::RLIMIT_RTPRIO, &mut rlim) } == 0 {
-        caps.rtprio_limit = Some(rlim.rlim_cur as u64);
+        caps.rtprio_limit = Some(rlim.rlim_cur);
     }
 
     // Check RLIMIT_MEMLOCK

@@ -520,10 +520,12 @@ impl LogicEngine for WasmtimeHost {
             "Starting epoch ticker"
         );
 
-        match EpochTicker::new(tick_interval, move || {
+        let tick_cb = move || {
             engine.increment_epoch();
             epoch_counter.fetch_add(1, Ordering::Relaxed);
-        }) {
+        };
+
+        match EpochTicker::new(tick_interval, tick_cb) {
             Ok(ticker) => Some(ticker),
             Err(e) => {
                 warn!("Failed to start epoch ticker: {}", e);

@@ -114,29 +114,31 @@ impl Watchdog {
         // Set running BEFORE spawn so is_running() returns true immediately
         self.running.store(true, Ordering::Release);
 
-        let handle = match thread::Builder::new()
-            .name("plc-watchdog".into())
-            .spawn(move || {
-                debug!("Watchdog monitor thread started");
+        let monitor = move || {
+            debug!("Watchdog monitor thread started");
 
-                while !state.stop_requested.load(Ordering::Acquire) {
-                    thread::sleep(check_interval);
+            while !state.stop_requested.load(Ordering::Acquire) {
+                thread::sleep(check_interval);
 
-                    if state.stop_requested.load(Ordering::Acquire) {
-                        break;
-                    }
-
-                    if state.is_timed_out(timeout_ns)
-                        && !state.triggered.swap(true, Ordering::AcqRel)
-                    {
-                        error!("Watchdog timeout! RT loop has not responded.");
-                        on_trigger();
-                    }
+                if state.stop_requested.load(Ordering::Acquire) {
+                    break;
                 }
 
-                running.store(false, Ordering::Release);
-                debug!("Watchdog monitor thread stopped");
-            }) {
+                if state.is_timed_out(timeout_ns) && !state.triggered.swap(true, Ordering::AcqRel)
+                {
+                    error!("Watchdog timeout! RT loop has not responded.");
+                    on_trigger();
+                }
+            }
+
+            running.store(false, Ordering::Release);
+            debug!("Watchdog monitor thread stopped");
+        };
+
+        let handle = match thread::Builder::new()
+            .name("plc-watchdog".into())
+            .spawn(monitor)
+        {
             Ok(h) => h,
             Err(e) => {
                 // Reset running flag on spawn failure

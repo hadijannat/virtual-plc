@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use crate::diagnostics::{DiagnosticsCollector, DiagnosticsState};
+use crate::diagnostics::{format_prometheus_metrics, DiagnosticsCollector, DiagnosticsState};
 use crate::signals::SignalHandler;
 
 /// PLC daemon command-line arguments.
@@ -158,6 +158,9 @@ fn run_daemon(
     diagnostics: &DiagnosticsCollector,
     max_cycles: u64,
 ) -> Result<()> {
+    let metrics_http_export = config.metrics.http_export;
+    let target_cycle_ns = u64::try_from(config.cycle_time.as_nanos()).unwrap_or(u64::MAX);
+
     // Initialize fieldbus driver
     let mut fieldbus = create_fieldbus_driver(config)?;
     fieldbus.init().context("Failed to initialize fieldbus")?;
@@ -196,6 +199,8 @@ fn run_daemon(
             signal_handler,
             diagnostics,
             max_cycles,
+            metrics_http_export,
+            target_cycle_ns,
         )
     } else {
         info!("No Wasm module configured, using NullEngine");
@@ -209,6 +214,8 @@ fn run_daemon(
             signal_handler,
             diagnostics,
             max_cycles,
+            metrics_http_export,
+            target_cycle_ns,
         )
     }
 }
@@ -250,6 +257,8 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
     signal_handler: &SignalHandler,
     diagnostics: &DiagnosticsCollector,
     max_cycles: u64,
+    metrics_http_export: bool,
+    target_cycle_ns: u64,
 ) -> Result<()> {
     // Initialize scheduler
     scheduler
@@ -419,6 +428,9 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
 
     // Final statistics
     let snapshot = diagnostics.snapshot(scheduler.state(), scheduler.metrics());
+    if metrics_http_export {
+        let _ = format_prometheus_metrics(&snapshot, target_cycle_ns);
+    }
     info!(
         total_cycles = snapshot.cycle_count,
         overruns = snapshot.overrun_count,

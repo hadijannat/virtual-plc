@@ -285,146 +285,143 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
     let mut in_failure_streak = false;
     const MAX_CONSECUTIVE_FB_FAILURES: u32 = 3;
 
-    let mut shutdown_pending =
-        wait_for_shutdown(signal_handler, std::time::Duration::from_millis(0));
-    if shutdown_pending {
+    let shutdown_requested = wait_for_shutdown(signal_handler, std::time::Duration::from_millis(0));
+    if shutdown_requested {
         info!("Shutdown already requested before entering main loop");
     }
 
-    while scheduler.state() == RuntimeState::Run && !shutdown_pending {
-        // Check for shutdown signal
-        if signal_handler.shutdown_requested() {
-            info!("Shutdown signal received, stopping scheduler");
-            shutdown_pending = true;
-            break;
-        }
-
-        // Check for reload signal (config reload)
-        if signal_handler.take_reload_request() {
-            info!("Reload signal received (config reload not yet implemented)");
-        }
-
-        // Copy outputs from scheduler to fieldbus before exchange
-        // Skip if in failure streak - keep safe outputs latched
-        if !in_failure_streak {
-            let outputs = scheduler.io.read_outputs();
-            let fb_outputs = plc_fieldbus::FieldbusOutputs {
-                digital: outputs.digital_outputs[0],
-                analog: outputs.analog_outputs,
-            };
-            fieldbus.set_outputs(&fb_outputs);
-        }
-
-        // Perform fieldbus exchange
-        if let Err(e) = fieldbus.exchange() {
-            consecutive_fb_failures += 1;
-            in_failure_streak = true;
-            error!(
-                error = %e,
-                consecutive_failures = consecutive_fb_failures,
-                "Fieldbus exchange failed"
-            );
-            diagnostics.state().set_fieldbus_connected(false);
-
-            // Set safe outputs and attempt to send them
-            let safe_outputs = plc_fieldbus::FieldbusOutputs {
-                digital: 0,
-                analog: [0; 16],
-            };
-            fieldbus.set_outputs(&safe_outputs);
-            // Best-effort attempt to push safe outputs on the wire
-            let _ = fieldbus.exchange();
-
-            // Enter fault state after too many consecutive failures
-            if consecutive_fb_failures >= MAX_CONSECUTIVE_FB_FAILURES {
-                error!(
-                    failures = consecutive_fb_failures,
-                    "Maximum consecutive fieldbus failures reached, entering fault state"
-                );
-                // Enter FAULT state (not SAFE_STOP) before exiting
-                if let Err(e) = scheduler.enter_fault("Fieldbus failure limit exceeded") {
-                    warn!("Failed to enter fault state: {}", e);
-                }
-                signal_handler.request_shutdown();
-                shutdown_pending = true;
+    if !shutdown_requested {
+        while scheduler.state() == RuntimeState::Run {
+            // Check for shutdown signal
+            if signal_handler.shutdown_requested() {
+                info!("Shutdown signal received, stopping scheduler");
                 break;
             }
-        } else {
-            // Recovery path: reset failure tracking on successful exchange
-            if in_failure_streak {
-                info!(
-                    previous_failures = consecutive_fb_failures,
-                    "Fieldbus communication recovered"
-                );
-                // Clear streak FIRST so next iteration uses logic outputs
-                in_failure_streak = false;
-                consecutive_fb_failures = 0;
 
-                // Immediately copy fresh logic outputs and exchange again
-                // to avoid one-cycle delay in output recovery
+            // Check for reload signal (config reload)
+            if signal_handler.take_reload_request() {
+                info!("Reload signal received (config reload not yet implemented)");
+            }
+
+            // Copy outputs from scheduler to fieldbus before exchange
+            // Skip if in failure streak - keep safe outputs latched
+            if !in_failure_streak {
                 let outputs = scheduler.io.read_outputs();
                 let fb_outputs = plc_fieldbus::FieldbusOutputs {
                     digital: outputs.digital_outputs[0],
                     analog: outputs.analog_outputs,
                 };
                 fieldbus.set_outputs(&fb_outputs);
-                // Best-effort to get outputs out immediately on recovery
-                let _ = fieldbus.exchange();
             }
-            diagnostics.state().set_fieldbus_connected(true);
-        }
 
-        // Copy inputs from fieldbus to scheduler after exchange
-        {
-            let fb_inputs = fieldbus.get_inputs();
-            scheduler.io.write_inputs(|data| {
-                data.digital_inputs[0] = fb_inputs.digital;
-                data.analog_inputs = fb_inputs.analog;
-            });
-        }
+            // Perform fieldbus exchange
+            if let Err(e) = fieldbus.exchange() {
+                consecutive_fb_failures += 1;
+                in_failure_streak = true;
+                error!(
+                    error = %e,
+                    consecutive_failures = consecutive_fb_failures,
+                    "Fieldbus exchange failed"
+                );
+                diagnostics.state().set_fieldbus_connected(false);
 
-        // Run one PLC cycle
-        match scheduler.run_cycle() {
-            Ok(result) => {
-                diagnostics
-                    .state()
-                    .record_cycle(result.execution_time, result.overrun);
+                // Set safe outputs and attempt to send them
+                let safe_outputs = plc_fieldbus::FieldbusOutputs {
+                    digital: 0,
+                    analog: [0; 16],
+                };
+                fieldbus.set_outputs(&safe_outputs);
+                // Best-effort attempt to push safe outputs on the wire
+                let _ = fieldbus.exchange();
 
-                if result.overrun {
-                    warn!(
-                        cycle = result.cycle_count,
-                        execution_us = result.execution_time.as_micros(),
-                        "Cycle overrun detected"
+                // Enter fault state after too many consecutive failures
+                if consecutive_fb_failures >= MAX_CONSECUTIVE_FB_FAILURES {
+                    error!(
+                        failures = consecutive_fb_failures,
+                        "Maximum consecutive fieldbus failures reached, entering fault state"
                     );
+                    // Enter FAULT state (not SAFE_STOP) before exiting
+                    if let Err(e) = scheduler.enter_fault("Fieldbus failure limit exceeded") {
+                        warn!("Failed to enter fault state: {}", e);
+                    }
+                    signal_handler.request_shutdown();
+                    break;
+                }
+            } else {
+                // Recovery path: reset failure tracking on successful exchange
+                if in_failure_streak {
+                    info!(
+                        previous_failures = consecutive_fb_failures,
+                        "Fieldbus communication recovered"
+                    );
+                    // Clear streak FIRST so next iteration uses logic outputs
+                    in_failure_streak = false;
+                    consecutive_fb_failures = 0;
+
+                    // Immediately copy fresh logic outputs and exchange again
+                    // to avoid one-cycle delay in output recovery
+                    let outputs = scheduler.io.read_outputs();
+                    let fb_outputs = plc_fieldbus::FieldbusOutputs {
+                        digital: outputs.digital_outputs[0],
+                        analog: outputs.analog_outputs,
+                    };
+                    fieldbus.set_outputs(&fb_outputs);
+                    // Best-effort to get outputs out immediately on recovery
+                    let _ = fieldbus.exchange();
+                }
+                diagnostics.state().set_fieldbus_connected(true);
+            }
+
+            // Copy inputs from fieldbus to scheduler after exchange
+            {
+                let fb_inputs = fieldbus.get_inputs();
+                scheduler.io.write_inputs(|data| {
+                    data.digital_inputs[0] = fb_inputs.digital;
+                    data.analog_inputs = fb_inputs.analog;
+                });
+            }
+
+            // Run one PLC cycle
+            match scheduler.run_cycle() {
+                Ok(result) => {
+                    diagnostics
+                        .state()
+                        .record_cycle(result.execution_time, result.overrun);
+
+                    if result.overrun {
+                        warn!(
+                            cycle = result.cycle_count,
+                            execution_us = result.execution_time.as_micros(),
+                            "Cycle overrun detected"
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!("Cycle execution failed: {}", e);
+                    signal_handler.request_shutdown();
+                    break;
                 }
             }
-            Err(e) => {
-                error!("Cycle execution failed: {}", e);
+
+            // Check cycle limit
+            cycles_run += 1;
+            if max_cycles > 0 && cycles_run >= max_cycles {
+                info!(cycles = cycles_run, "Maximum cycle count reached");
                 signal_handler.request_shutdown();
-                shutdown_pending = true;
                 break;
             }
-        }
 
-        // Check cycle limit
-        cycles_run += 1;
-        if max_cycles > 0 && cycles_run >= max_cycles {
-            info!(cycles = cycles_run, "Maximum cycle count reached");
-            signal_handler.request_shutdown();
-            shutdown_pending = true;
-            break;
-        }
-
-        // Periodic status logging (every 10000 cycles)
-        if cycles_run % 10000 == 0 {
-            let metrics = scheduler.metrics();
-            info!(
-                cycles = cycles_run,
-                avg_us = metrics.mean().map(|d| d.as_micros()).unwrap_or(0),
-                max_us = metrics.max().map(|d| d.as_micros()).unwrap_or(0),
-                overruns = diagnostics.state().overrun_count(),
-                "Periodic status"
-            );
+            // Periodic status logging (every 10000 cycles)
+            if cycles_run % 10000 == 0 {
+                let metrics = scheduler.metrics();
+                info!(
+                    cycles = cycles_run,
+                    avg_us = metrics.mean().map(|d| d.as_micros()).unwrap_or(0),
+                    max_us = metrics.max().map(|d| d.as_micros()).unwrap_or(0),
+                    overruns = diagnostics.state().overrun_count(),
+                    "Periodic status"
+                );
+            }
         }
     }
 

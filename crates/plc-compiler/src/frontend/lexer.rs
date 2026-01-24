@@ -324,8 +324,9 @@ impl Token {
 /// Supports formats like:
 /// - T#1s, T#100ms, T#1h30m
 /// - TIME#1d2h3m4s5ms
+/// - T#1h30m500ms (mixed units in any order)
 pub fn parse_time_literal(s: &str) -> Result<i64, &'static str> {
-    // Remove T# or TIME# prefix
+    // Remove T# or TIME# prefix (case-insensitive)
     let s = s
         .strip_prefix("T#")
         .or_else(|| s.strip_prefix("TIME#"))
@@ -334,58 +335,81 @@ pub fn parse_time_literal(s: &str) -> Result<i64, &'static str> {
         .ok_or("Invalid time literal prefix")?;
 
     let mut total_ns: i64 = 0;
-    let mut current_num = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
 
-    for c in s.chars() {
-        if c.is_ascii_digit() || c == '.' || c == '_' {
-            if c != '_' {
-                current_num.push(c);
+    while i < chars.len() {
+        // Skip underscores (number separators)
+        while i < chars.len() && chars[i] == '_' {
+            i += 1;
+        }
+        if i >= chars.len() {
+            break;
+        }
+
+        // Parse number (integer or decimal)
+        let num_start = i;
+        while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+            i += 1;
+        }
+
+        if i == num_start {
+            // No number found, skip this character
+            i += 1;
+            continue;
+        }
+
+        let num_str: String = chars[num_start..i].iter().collect();
+        let value: f64 = num_str.parse().map_err(|_| "Invalid number in time")?;
+
+        // Parse unit (check for 2-char units first: ms, us, ns)
+        if i >= chars.len() {
+            return Err("Missing time unit");
+        }
+
+        let c1 = chars[i].to_ascii_lowercase();
+
+        // Check for two-character units
+        let multiplier = if i + 1 < chars.len() {
+            let c2 = chars[i + 1].to_ascii_lowercase();
+            match (c1, c2) {
+                ('m', 's') => {
+                    i += 2;
+                    1_000_000i64 // milliseconds
+                }
+                ('u', 's') => {
+                    i += 2;
+                    1_000i64 // microseconds
+                }
+                ('n', 's') => {
+                    i += 2;
+                    1i64 // nanoseconds
+                }
+                _ => {
+                    // Single character unit
+                    i += 1;
+                    match c1 {
+                        'd' => 24 * 60 * 60 * 1_000_000_000i64, // days
+                        'h' => 60 * 60 * 1_000_000_000i64,      // hours
+                        'm' => 60 * 1_000_000_000i64,           // minutes
+                        's' => 1_000_000_000i64,                // seconds
+                        _ => return Err("Unknown time unit"),
+                    }
+                }
             }
         } else {
-            if current_num.is_empty() {
-                continue;
-            }
-            let value: f64 = current_num.parse().map_err(|_| "Invalid number in time")?;
-            current_num.clear();
-
-            let multiplier = match c.to_ascii_lowercase() {
+            // Last character, must be single-char unit
+            i += 1;
+            match c1 {
                 'd' => 24 * 60 * 60 * 1_000_000_000i64,
                 'h' => 60 * 60 * 1_000_000_000i64,
-                'm' if s.contains("ms") => continue, // Handle ms below
                 'm' => 60 * 1_000_000_000i64,
                 's' => 1_000_000_000i64,
                 _ => return Err("Unknown time unit"),
-            };
+            }
+        };
 
-            total_ns += (value * multiplier as f64) as i64;
-        }
-    }
-
-    // Handle trailing 'ms', 'us', 'ns'
-    if s.ends_with("ms") {
-        if let Some(idx) = s.rfind(|c: char| !c.is_ascii_digit() && c != '.') {
-            let num_str = &s[idx + 1..s.len() - 2];
-            if !num_str.is_empty() {
-                let value: f64 = num_str.parse().map_err(|_| "Invalid ms value")?;
-                total_ns += (value * 1_000_000.0) as i64;
-            }
-        }
-    } else if s.ends_with("us") {
-        if let Some(idx) = s.rfind(|c: char| !c.is_ascii_digit() && c != '.') {
-            let num_str = &s[idx + 1..s.len() - 2];
-            if !num_str.is_empty() {
-                let value: f64 = num_str.parse().map_err(|_| "Invalid us value")?;
-                total_ns += (value * 1_000.0) as i64;
-            }
-        }
-    } else if s.ends_with("ns") {
-        if let Some(idx) = s.rfind(|c: char| !c.is_ascii_digit() && c != '.') {
-            let num_str = &s[idx + 1..s.len() - 2];
-            if !num_str.is_empty() {
-                let value: f64 = num_str.parse().map_err(|_| "Invalid ns value")?;
-                total_ns += value as i64;
-            }
-        }
+        total_ns = total_ns.saturating_add((value * multiplier as f64) as i64);
     }
 
     Ok(total_ns)
@@ -409,5 +433,68 @@ mod tests {
         assert_eq!(parse_time_literal("T#1s"), Ok(1_000_000_000));
         assert_eq!(parse_time_literal("T#1h"), Ok(3_600_000_000_000));
         assert_eq!(parse_time_literal("TIME#1d"), Ok(86_400_000_000_000));
+    }
+
+    #[test]
+    fn test_time_literal_milliseconds() {
+        assert_eq!(parse_time_literal("T#1ms"), Ok(1_000_000));
+        assert_eq!(parse_time_literal("T#100ms"), Ok(100_000_000));
+        assert_eq!(parse_time_literal("T#500ms"), Ok(500_000_000));
+    }
+
+    #[test]
+    fn test_time_literal_microseconds() {
+        assert_eq!(parse_time_literal("T#1us"), Ok(1_000));
+        assert_eq!(parse_time_literal("T#100us"), Ok(100_000));
+    }
+
+    #[test]
+    fn test_time_literal_nanoseconds() {
+        assert_eq!(parse_time_literal("T#1ns"), Ok(1));
+        assert_eq!(parse_time_literal("T#1000ns"), Ok(1000));
+    }
+
+    #[test]
+    fn test_time_literal_mixed_units() {
+        // 1 second + 500 milliseconds
+        assert_eq!(parse_time_literal("T#1s500ms"), Ok(1_500_000_000));
+
+        // 1 hour + 30 minutes
+        assert_eq!(
+            parse_time_literal("T#1h30m"),
+            Ok(3_600_000_000_000 + 30 * 60 * 1_000_000_000)
+        );
+
+        // 1 hour + 30 minutes + 500 milliseconds
+        assert_eq!(
+            parse_time_literal("T#1h30m500ms"),
+            Ok(3_600_000_000_000 + 30 * 60 * 1_000_000_000 + 500_000_000)
+        );
+
+        // Full format: days, hours, minutes, seconds, ms
+        assert_eq!(
+            parse_time_literal("TIME#1d2h3m4s5ms"),
+            Ok(86_400_000_000_000  // 1 day
+               + 2 * 3_600_000_000_000  // 2 hours
+               + 3 * 60_000_000_000     // 3 minutes
+               + 4 * 1_000_000_000      // 4 seconds
+               + 5_000_000)             // 5 ms
+        );
+    }
+
+    #[test]
+    fn test_time_literal_minutes_with_ms() {
+        // This was the bug: minutes were skipped when "ms" appeared anywhere
+        // 2 minutes + 500 milliseconds = 120s + 0.5s = 120.5s
+        assert_eq!(
+            parse_time_literal("T#2m500ms"),
+            Ok(2 * 60 * 1_000_000_000 + 500_000_000)
+        );
+    }
+
+    #[test]
+    fn test_time_literal_decimal() {
+        assert_eq!(parse_time_literal("T#1.5s"), Ok(1_500_000_000));
+        assert_eq!(parse_time_literal("T#0.5h"), Ok(30 * 60 * 1_000_000_000));
     }
 }

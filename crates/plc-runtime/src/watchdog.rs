@@ -95,6 +95,10 @@ impl Watchdog {
 
         info!(timeout_ms = self.timeout.as_millis(), "Starting watchdog");
 
+        // Clear flags from any previous run to allow restart
+        self.state.stop_requested.store(false, Ordering::Release);
+        self.state.triggered.store(false, Ordering::Release);
+
         // Initial kick to set baseline
         self.state.kick();
 
@@ -103,9 +107,13 @@ impl Watchdog {
         let timeout_ns = self.timeout.as_nanos() as u64;
         let check_interval = self.timeout / 4; // Check 4x per timeout period
 
-        running.store(true, Ordering::Release);
+        // Clamp check_interval to minimum 1ms to avoid spin
+        let check_interval = check_interval.max(Duration::from_millis(1));
 
-        let handle = thread::Builder::new()
+        // Set running BEFORE spawn so is_running() returns true immediately
+        self.running.store(true, Ordering::Release);
+
+        let handle = match thread::Builder::new()
             .name("plc-watchdog".into())
             .spawn(move || {
                 debug!("Watchdog monitor thread started");
@@ -127,8 +135,16 @@ impl Watchdog {
 
                 running.store(false, Ordering::Release);
                 debug!("Watchdog monitor thread stopped");
-            })
-            .map_err(|e| PlcError::Config(format!("Failed to spawn watchdog thread: {e}")))?;
+            }) {
+            Ok(h) => h,
+            Err(e) => {
+                // Reset running flag on spawn failure
+                self.running.store(false, Ordering::Release);
+                return Err(PlcError::Config(format!(
+                    "Failed to spawn watchdog thread: {e}"
+                )));
+            }
+        };
 
         self.monitor_handle = Some(handle);
         Ok(())
@@ -148,11 +164,38 @@ impl Watchdog {
         self.state.triggered.load(Ordering::Acquire)
     }
 
-    /// Reset the watchdog after a fault has been handled.
+    /// Reset the watchdog state after a fault has been handled.
+    ///
+    /// This clears the triggered flag and kicks the watchdog.
+    /// Use this when the watchdog is still running but you want to
+    /// acknowledge a trigger and continue.
     pub fn reset(&self) {
         self.state.triggered.store(false, Ordering::Release);
         self.state.kick();
         info!("Watchdog reset");
+    }
+
+    /// Fully reset the watchdog state for restart.
+    ///
+    /// This clears all flags (stop_requested, triggered, running).
+    /// Use this before calling `start()` after a `stop()`.
+    pub fn full_reset(&mut self) {
+        self.state.stop_requested.store(false, Ordering::Release);
+        self.state.triggered.store(false, Ordering::Release);
+        self.running.store(false, Ordering::Release);
+        self.state.kick();
+        info!("Watchdog full reset");
+    }
+
+    /// Stop and restart the watchdog.
+    ///
+    /// Convenience method that calls `stop()` then `start()`.
+    pub fn restart<F>(&mut self, on_trigger: F) -> PlcResult<()>
+    where
+        F: Fn() + Send + 'static,
+    {
+        self.stop();
+        self.start(on_trigger)
     }
 
     /// Stop the watchdog monitor thread.
@@ -399,8 +442,51 @@ mod tests {
         std::thread::sleep(Duration::from_millis(150));
         assert!(wd.has_triggered());
 
-        // Reset
+        // Reset clears the flag and kicks
         wd.reset();
+        // Check immediately after reset (before watchdog can re-trigger)
+        assert!(!wd.has_triggered());
+
+        // Keep kicking to prevent re-trigger
+        wd.kick();
+
+        wd.stop();
+    }
+
+    #[test]
+    fn test_watchdog_restart() {
+        let trigger_count = Arc::new(AtomicUsize::new(0));
+        let trigger_count_clone = Arc::clone(&trigger_count);
+
+        let mut wd = Watchdog::new(Duration::from_millis(100));
+
+        // Start and kick
+        wd.start(move || {
+            trigger_count_clone.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+        wd.kick();
+        assert!(wd.is_running());
+
+        // Stop
+        wd.stop();
+        // Wait for thread to actually stop
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!wd.is_running());
+
+        // Restart should work
+        let trigger_count_clone2 = Arc::clone(&trigger_count);
+        wd.restart(move || {
+            trigger_count_clone2.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
+        assert!(wd.is_running());
+
+        // Keep kicking - should not trigger
+        for _ in 0..5 {
+            wd.kick();
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert!(!wd.has_triggered());
 
         wd.stop();

@@ -122,7 +122,7 @@ impl<E: LogicEngine> Scheduler<E> {
 
     /// Start cyclic execution.
     ///
-    /// Transitions from PRE_OP → RUN.
+    /// Transitions from PRE_OP → RUN and starts the watchdog if configured.
     pub fn start(&mut self) -> PlcResult<()> {
         if self.state.state() != RuntimeState::PreOp {
             return Err(PlcError::InvalidStateTransition {
@@ -135,6 +135,16 @@ impl<E: LogicEngine> Scheduler<E> {
             cycle_period_us = self.cycle_period.as_micros(),
             "Starting cyclic execution"
         );
+
+        // Start the watchdog timer if configured
+        if let Some(ref mut wd) = self.watchdog {
+            wd.start(|| {
+                // The callback is invoked when watchdog times out.
+                // The triggered flag is already set by the watchdog itself.
+                // The main loop checks watchdog_triggered() and enters fault state.
+                error!("Watchdog triggered - RT loop has stopped responding");
+            })?;
+        }
 
         self.state.transition(RuntimeState::Run)?;
         self.next_deadline = Some(Instant::now() + self.cycle_period);
@@ -164,6 +174,12 @@ impl<E: LogicEngine> Scheduler<E> {
             )));
         }
 
+        // Check if watchdog has triggered (RT loop was too slow)
+        if self.watchdog_triggered() {
+            self.enter_fault("Watchdog timeout detected")?;
+            return Err(PlcError::Fault("Watchdog timeout".into()));
+        }
+
         let cycle_start = Instant::now();
 
         // 1. Kick watchdog
@@ -184,7 +200,11 @@ impl<E: LogicEngine> Scheduler<E> {
         };
 
         // 4. Write outputs to I/O image for fieldbus to read
-        *self.io.outputs_mut() = outputs;
+        // Only copy output fields, not the entire ProcessData
+        self.io.write_outputs(|io_outputs| {
+            io_outputs.digital_outputs = outputs.digital_outputs;
+            io_outputs.analog_outputs = outputs.analog_outputs;
+        });
 
         let execution_time = cycle_start.elapsed();
         self.cycle_count += 1;
@@ -257,9 +277,14 @@ impl<E: LogicEngine> Scheduler<E> {
 
     /// Stop cyclic execution gracefully.
     ///
-    /// Transitions RUN → SAFE_STOP.
+    /// Transitions RUN → SAFE_STOP and stops the watchdog.
     pub fn stop(&mut self) -> PlcResult<()> {
         info!("Stopping scheduler");
+
+        // Stop the watchdog first to prevent spurious triggers during shutdown
+        if let Some(ref mut wd) = self.watchdog {
+            wd.stop();
+        }
 
         if self.state.state() == RuntimeState::Run {
             self.state.transition(RuntimeState::SafeStop)?;

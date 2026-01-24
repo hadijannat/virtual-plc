@@ -98,10 +98,14 @@ impl Ton {
     ///
     /// A tuple of (Q output, ET elapsed time).
     pub fn call(&mut self, input: bool, pt: i64, delta_t: i64) -> (bool, i64) {
+        // Guard against negative inputs
+        let pt = pt.max(0);
+        let delta_t = delta_t.max(0);
+
         if input {
-            // Accumulate time while input is TRUE
+            // Accumulate time while input is TRUE, using saturating_add to prevent overflow
             if self.et < pt {
-                self.et = (self.et + delta_t).min(pt);
+                self.et = self.et.saturating_add(delta_t).min(pt);
             }
             // Output TRUE when elapsed >= preset
             self.q = self.et >= pt;
@@ -225,6 +229,10 @@ impl Tof {
     ///
     /// A tuple of (Q output, ET elapsed time).
     pub fn call(&mut self, input: bool, pt: i64, delta_t: i64) -> (bool, i64) {
+        // Guard against negative inputs
+        let pt = pt.max(0);
+        let delta_t = delta_t.max(0);
+
         if input {
             // Input TRUE - output TRUE, reset timer
             self.q = true;
@@ -236,8 +244,8 @@ impl Tof {
             self.et = delta_t.min(pt);
             self.q = self.et < pt;
         } else if self.running {
-            // Timer running
-            self.et = (self.et + delta_t).min(pt);
+            // Timer running, using saturating_add to prevent overflow
+            self.et = self.et.saturating_add(delta_t).min(pt);
             if self.et >= pt {
                 self.q = false;
                 self.running = false;
@@ -357,6 +365,10 @@ impl Tp {
     ///
     /// A tuple of (Q output, ET elapsed time).
     pub fn call(&mut self, input: bool, pt: i64, delta_t: i64) -> (bool, i64) {
+        // Guard against negative inputs
+        let pt = pt.max(0);
+        let delta_t = delta_t.max(0);
+
         // Detect rising edge to start pulse (only if not already running)
         if input && !self.prev_in && !self.running {
             self.running = true;
@@ -364,9 +376,9 @@ impl Tp {
             self.et = 0;
         }
 
-        // If pulse is running, accumulate time
+        // If pulse is running, accumulate time using saturating_add to prevent overflow
         if self.running {
-            self.et = (self.et + delta_t).min(pt);
+            self.et = self.et.saturating_add(delta_t).min(pt);
             if self.et >= pt {
                 self.q = false;
                 self.running = false;
@@ -655,5 +667,60 @@ mod tests {
         assert!(!tp.q());
         assert_eq!(tp.et(), 0);
         assert!(!tp.is_running());
+    }
+
+    // ==================== Overflow Guard Tests ====================
+
+    #[test]
+    fn test_ton_negative_inputs() {
+        let mut ton = Ton::new();
+
+        // Negative pt should be treated as 0
+        let (q, et) = ton.call(true, -100, 100 * MS);
+        assert!(q); // Immediately reaches preset of 0
+        assert_eq!(et, 0);
+
+        ton.reset();
+
+        // Negative delta_t should be treated as 0
+        let (q, et) = ton.call(true, SEC, -100);
+        assert!(!q);
+        assert_eq!(et, 0);
+    }
+
+    #[test]
+    fn test_ton_saturating_add() {
+        let mut ton = Ton::new();
+
+        // Set up timer with large elapsed time
+        ton.call(true, i64::MAX, i64::MAX / 2);
+        ton.call(true, i64::MAX, i64::MAX / 2);
+
+        // This should not overflow, should saturate to i64::MAX
+        let (_, et) = ton.call(true, i64::MAX, i64::MAX / 2);
+        assert!(et > 0); // Should be clamped, not wrapped to negative
+    }
+
+    #[test]
+    fn test_tof_negative_inputs() {
+        let mut tof = Tof::new();
+
+        // Start with TRUE
+        tof.call(true, SEC, 100 * MS);
+
+        // Falling edge with negative pt should complete immediately
+        let (q, et) = tof.call(false, -100, 100 * MS);
+        assert!(!q); // Completed immediately
+        assert_eq!(et, 0);
+    }
+
+    #[test]
+    fn test_tp_negative_inputs() {
+        let mut tp = Tp::new();
+
+        // Negative pt should result in immediate pulse completion
+        let (q, _) = tp.call(true, -100, 100 * MS);
+        // Pulse starts but immediately completes since pt=0
+        assert!(!q);
     }
 }

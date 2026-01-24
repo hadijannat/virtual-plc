@@ -10,6 +10,10 @@
 use std::fs;
 use std::process::{Command, Stdio};
 use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Global counter for unique temp file names.
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Result of a latency measurement session.
 #[derive(Debug, Clone, Default)]
@@ -124,6 +128,13 @@ pub fn check_rt_prerequisites() -> Result<(), String> {
     }
 }
 
+/// Generate a unique temp file path for cyclictest histogram.
+fn unique_histfile_path() -> String {
+    let pid = std::process::id();
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("/tmp/cyclictest_hist_{}_{}.txt", pid, counter)
+}
+
 /// Run cyclictest and parse results.
 ///
 /// # Arguments
@@ -138,6 +149,9 @@ pub fn run_cyclictest(
     priority: u32,
     cpu: Option<usize>,
 ) -> Result<LatencyStats, String> {
+    // Generate unique histogram file path
+    let histfile = unique_histfile_path();
+
     let mut cmd = Command::new("cyclictest");
 
     cmd.arg("--mlockall")
@@ -148,7 +162,7 @@ pub fn run_cyclictest(
         .arg("--duration")
         .arg(duration_secs.to_string())
         .arg("--histogram=1000")
-        .arg("--histfile=/tmp/cyclictest_hist.txt");
+        .arg(format!("--histfile={}", histfile));
 
     if let Some(c) = cpu {
         cmd.arg("--affinity").arg(c.to_string());
@@ -160,18 +174,24 @@ pub fn run_cyclictest(
         .output()
         .map_err(|e| format!("Failed to run cyclictest: {}", e))?;
 
-    if !output.status.success() {
-        return Err(format!(
+    // Clean up histogram file after reading
+    let result = if !output.status.success() {
+        Err(format!(
             "cyclictest failed: {}",
             String::from_utf8_lossy(&output.stderr)
-        ));
-    }
+        ))
+    } else {
+        parse_cyclictest_output(&String::from_utf8_lossy(&output.stdout), &histfile)
+    };
 
-    parse_cyclictest_output(&String::from_utf8_lossy(&output.stdout))
+    // Always try to clean up the temp file
+    let _ = fs::remove_file(&histfile);
+
+    result
 }
 
 /// Parse cyclictest output to extract statistics.
-fn parse_cyclictest_output(output: &str) -> Result<LatencyStats, String> {
+fn parse_cyclictest_output(output: &str, histfile: &str) -> Result<LatencyStats, String> {
     let mut stats = LatencyStats::default();
 
     for line in output.lines() {
@@ -179,22 +199,71 @@ fn parse_cyclictest_output(output: &str) -> Result<LatencyStats, String> {
         if line.starts_with("T:") {
             let parts: Vec<&str> = line.split_whitespace().collect();
             for (i, part) in parts.iter().enumerate() {
+                // Handle both "Min: 1" (separate tokens) and "Min:1" (joined)
                 if *part == "Min:" && i + 1 < parts.len() {
                     stats.min_us = parts[i + 1].parse().unwrap_or(0);
+                } else if let Some(val) = part.strip_prefix("Min:") {
+                    if let Ok(n) = val.parse::<u64>() {
+                        stats.min_us = n;
+                    }
                 } else if *part == "Avg:" && i + 1 < parts.len() {
                     stats.avg_us = parts[i + 1].parse().unwrap_or(0);
+                } else if let Some(val) = part.strip_prefix("Avg:") {
+                    if let Ok(n) = val.parse::<u64>() {
+                        stats.avg_us = n;
+                    }
                 } else if *part == "Max:" && i + 1 < parts.len() {
                     stats.max_us = parts[i + 1].parse().unwrap_or(0);
-                } else if part.starts_with("C:") {
-                    stats.samples = part[2..].trim().parse().unwrap_or(0);
+                } else if let Some(val) = part.strip_prefix("Max:") {
+                    if let Ok(n) = val.parse::<u64>() {
+                        stats.max_us = n;
+                    }
+                }
+            }
+
+            // Parse C: (cycles) - it appears as "C:" followed by a number
+            // Format: "C:  10000" or "C:10000"
+            if let Some(c_pos) = line.find("C:") {
+                let after_c = &line[c_pos + 2..];
+                let num_str: String = after_c
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || c.is_whitespace())
+                    .collect();
+                if let Ok(n) = num_str.trim().parse::<u64>() {
+                    stats.samples = stats.samples.saturating_add(n);
+                }
+            }
+        }
+
+        // Parse overrun count from lines like: "Total: 000001234"
+        // cyclictest reports overruns with "OVERRUN" in the output or in summary
+        if line.contains("overrun") || line.contains("OVERRUN") {
+            // Try to extract number from the line
+            for word in line.split_whitespace() {
+                if let Ok(n) = word.parse::<u64>() {
+                    stats.overruns = stats.overruns.saturating_add(n);
                 }
             }
         }
     }
 
     // Try to parse histogram for percentiles
-    if let Ok(hist_content) = fs::read_to_string("/tmp/cyclictest_hist.txt") {
-        parse_histogram_percentiles(&hist_content, &mut stats);
+    match fs::read_to_string(histfile) {
+        Ok(hist_content) => {
+            parse_histogram_percentiles(&hist_content, &mut stats);
+        }
+        Err(e) => {
+            // Histogram file is required for accurate percentile data
+            return Err(format!(
+                "Failed to read histogram file {}: {}. Stats may be incomplete.",
+                histfile, e
+            ));
+        }
+    }
+
+    // Validate that we got meaningful data
+    if stats.samples == 0 {
+        return Err("No samples collected from cyclictest".to_string());
     }
 
     Ok(stats)
@@ -346,11 +415,85 @@ impl AcceptanceCriteria {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_acceptance_criteria_default() {
         let criteria = AcceptanceCriteria::default();
         assert_eq!(criteria.max_p99999_us, 50);
+    }
+
+    #[test]
+    fn test_parse_cyclictest_c_token() {
+        // Create a temporary histogram file with sample data
+        let mut histfile = NamedTempFile::new().unwrap();
+        writeln!(histfile, "1 5000").unwrap();
+        writeln!(histfile, "2 3000").unwrap();
+        writeln!(histfile, "3 2000").unwrap();
+        let histpath = histfile.path().to_str().unwrap();
+
+        // Test standard cyclictest output format
+        let output = "T: 0 ( 1234) P:99 I:1000 C:  10000 Min:      1 Act:    5 Avg:    3 Max:      42";
+        let result = parse_cyclictest_output(output, histpath);
+        assert!(result.is_ok(), "Parse should succeed: {:?}", result);
+        let stats = result.unwrap();
+        assert_eq!(stats.min_us, 1);
+        assert_eq!(stats.avg_us, 3);
+        assert_eq!(stats.max_us, 42);
+        // samples comes from histogram (5000+3000+2000=10000)
+        assert_eq!(stats.samples, 10000);
+    }
+
+    #[test]
+    fn test_parse_cyclictest_c_token_no_spaces() {
+        let mut histfile = NamedTempFile::new().unwrap();
+        writeln!(histfile, "1 5000").unwrap();
+        let histpath = histfile.path().to_str().unwrap();
+
+        // Test C: without spaces
+        let output = "T: 0 ( 1234) P:99 I:1000 C:5000 Min:1 Act:5 Avg:3 Max:42";
+        let result = parse_cyclictest_output(output, histpath);
+        assert!(result.is_ok());
+        let stats = result.unwrap();
+        assert_eq!(stats.min_us, 1);
+        assert_eq!(stats.max_us, 42);
+    }
+
+    #[test]
+    fn test_parse_cyclictest_multiple_threads() {
+        let mut histfile = NamedTempFile::new().unwrap();
+        writeln!(histfile, "1 15000").unwrap();
+        let histpath = histfile.path().to_str().unwrap();
+
+        // Multiple T: lines (multi-CPU)
+        let output = "\
+T: 0 ( 1234) P:99 I:1000 C:  5000 Min:      1 Act:    5 Avg:    3 Max:      20
+T: 1 ( 1235) P:99 I:1000 C:  5000 Min:      2 Act:    6 Avg:    4 Max:      25
+T: 2 ( 1236) P:99 I:1000 C:  5000 Min:      1 Act:    4 Avg:    3 Max:      30";
+
+        let result = parse_cyclictest_output(output, histpath);
+        assert!(result.is_ok());
+        let stats = result.unwrap();
+        // Last T: line values are used for min/avg/max (could be improved to aggregate)
+        assert_eq!(stats.max_us, 30);
+    }
+
+    #[test]
+    fn test_parse_cyclictest_overruns() {
+        let mut histfile = NamedTempFile::new().unwrap();
+        writeln!(histfile, "1 1000").unwrap();
+        let histpath = histfile.path().to_str().unwrap();
+
+        // Test overrun detection
+        let output = "\
+T: 0 ( 1234) P:99 I:1000 C:  1000 Min:      1 Act:    5 Avg:    3 Max:      42
+WARN: 5 overrun detected";
+
+        let result = parse_cyclictest_output(output, histpath);
+        assert!(result.is_ok());
+        let stats = result.unwrap();
+        assert_eq!(stats.overruns, 5);
     }
 
     #[test]

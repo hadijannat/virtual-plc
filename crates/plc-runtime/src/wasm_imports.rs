@@ -27,8 +27,8 @@ use wasmtime::{Caller, Linker, Memory};
 pub struct HostState {
     /// Reference to Wasm linear memory (set after instantiation).
     pub memory: Option<Memory>,
-    /// Cycle time in nanoseconds.
-    pub cycle_time_ns: u32,
+    /// Cycle time in nanoseconds (u64 to prevent overflow for cycles > 4.29s).
+    pub cycle_time_ns: u64,
     /// Current cycle number.
     pub cycle_count: u64,
     /// Whether we're in first-cycle mode.
@@ -51,7 +51,7 @@ impl Default for HostState {
 
 impl HostState {
     /// Create a new host state with the given cycle time.
-    pub fn new(cycle_time_ns: u32) -> Self {
+    pub fn new(cycle_time_ns: u64) -> Self {
         Self {
             cycle_time_ns,
             ..Default::default()
@@ -133,10 +133,13 @@ fn host_write_ao(mut caller: Caller<'_, HostState>, channel: i32, value: i32) {
 }
 
 /// Get the cycle time in nanoseconds.
+///
+/// Note: Returns i32 for Wasm ABI compatibility. Values > i32::MAX are capped.
 fn host_get_cycle_time(caller: Caller<'_, HostState>) -> i32 {
     let cycle_time = caller.data().cycle_time_ns;
     trace!(cycle_time_ns = cycle_time, "get_cycle_time");
-    cycle_time as i32
+    // Cap at i32::MAX for ABI compatibility (cycle times > ~2.1s will be capped)
+    cycle_time.min(i32::MAX as u64) as i32
 }
 
 /// Get the current cycle count.
@@ -154,17 +157,46 @@ fn host_is_first_cycle(caller: Caller<'_, HostState>) -> i32 {
 }
 
 /// Log a message from the Wasm module.
+///
+/// # Safety
+///
+/// This function validates that `ptr` and `len` are non-negative and that
+/// the memory range `[ptr, ptr+len)` is within bounds before accessing memory.
 fn host_log_message(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) {
+    // Validate inputs from Wasm - could be malicious
+    if ptr < 0 || len < 0 {
+        warn!(ptr, len, "log_message called with negative values");
+        return;
+    }
+
+    // Safe to convert to usize now
+    let start = ptr as usize;
+    let len_usize = len as usize;
+
+    // Check for overflow before computing end
+    let end = match start.checked_add(len_usize) {
+        Some(e) => e,
+        None => {
+            warn!(ptr, len, "log_message: ptr + len overflow");
+            return;
+        }
+    };
+
     let msg = if let Some(memory) = get_memory(&mut caller) {
         let data = memory.data(&caller);
-        let start = ptr as usize;
-        let end = start + len as usize;
         if end <= data.len() {
             std::str::from_utf8(&data[start..end]).ok().map(String::from)
         } else {
+            warn!(
+                ptr,
+                len,
+                memory_size = data.len(),
+                "log_message: out of bounds"
+            );
             None
         }
     } else {
+        warn!("log_message called without memory");
         None
     };
 

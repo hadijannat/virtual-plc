@@ -32,6 +32,8 @@ struct WasmEmitter {
     next_func_idx: u32,
     /// Host function indices.
     host_funcs: std::collections::HashMap<String, u32>,
+    /// User function indices (by name).
+    user_funcs: std::collections::HashMap<String, u32>,
 }
 
 impl WasmEmitter {
@@ -45,6 +47,7 @@ impl WasmEmitter {
             memory: MemorySection::new(),
             next_func_idx: 0,
             host_funcs: std::collections::HashMap::new(),
+            user_funcs: std::collections::HashMap::new(),
         }
     }
 
@@ -65,12 +68,34 @@ impl WasmEmitter {
             page_size_log2: None,
         });
 
+        // First pass: assign function indices to user-defined functions
+        let first_user_func_idx = self.next_func_idx;
+        for (i, func) in ir_module.functions.iter().enumerate() {
+            self.user_funcs
+                .insert(func.name.clone(), first_user_func_idx + i as u32);
+        }
+
         // Generate code for each function
         for func in &ir_module.functions {
             let type_idx = 0; // () -> () for step function
             self.functions.function(type_idx);
 
-            let mut f = Function::new(vec![]); // No locals for now
+            // Convert IR locals to Wasm locals
+            let wasm_locals: Vec<(u32, ValType)> = func
+                .locals
+                .iter()
+                .map(|l| {
+                    let val_type = match l.wasm_type {
+                        crate::ir::WasmType::I32 => ValType::I32,
+                        crate::ir::WasmType::I64 => ValType::I64,
+                        crate::ir::WasmType::F32 => ValType::F32,
+                        crate::ir::WasmType::F64 => ValType::F64,
+                    };
+                    (1, val_type) // One local of this type
+                })
+                .collect();
+
+            let mut f = Function::new(wasm_locals);
 
             // Emit instructions
             for instr in &func.body {
@@ -443,6 +468,11 @@ impl WasmEmitter {
             }
             Instruction::CallHost(name) => {
                 if let Some(&idx) = self.host_funcs.get(name) {
+                    f.instruction(&WasmInstr::Call(idx));
+                }
+            }
+            Instruction::CallUser(name) => {
+                if let Some(&idx) = self.user_funcs.get(name) {
                     f.instruction(&WasmInstr::Call(idx));
                 }
             }

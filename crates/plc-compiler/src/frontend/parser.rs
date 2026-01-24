@@ -154,7 +154,11 @@ fn parse_var_block(pair: Pair<Rule>) -> Result<VarBlock> {
             }
             Rule::var_decl => {
                 let span = span_from_pair(&item);
-                declarations.push(Spanned::new(parse_var_decl(item)?, span));
+                // parse_var_decl returns Vec<VarDecl> to handle comma-separated declarations
+                let decls = parse_var_decl(item)?;
+                for decl in decls {
+                    declarations.push(Spanned::new(decl, span));
+                }
             }
             _ => {}
         }
@@ -163,26 +167,46 @@ fn parse_var_block(pair: Pair<Rule>) -> Result<VarBlock> {
     Ok(VarBlock { kind, retain, constant, declarations })
 }
 
-fn parse_var_decl(pair: Pair<Rule>) -> Result<VarDecl> {
+/// Parse a variable declaration, which may declare multiple variables
+/// with the same type (e.g., "a, b, c: INT := 0;").
+fn parse_var_decl(pair: Pair<Rule>) -> Result<Vec<VarDecl>> {
     let mut inner = pair.into_inner();
 
-    // Get identifier list (we take the first one for simplicity)
+    // Get identifier list - may contain multiple identifiers
     let id_list = inner.next().unwrap();
-    let name = id_list.into_inner().next().unwrap().as_str().to_string();
+    let names: Vec<String> = id_list
+        .into_inner()
+        .map(|p| p.as_str().to_string())
+        .collect();
+
+    if names.is_empty() {
+        return Err(anyhow!("Variable declaration has no identifiers"));
+    }
 
     let data_type = parse_data_type(inner.next().unwrap())?;
 
-    let initial_value = inner.next().map(|p| {
-        let span = span_from_pair(&p);
-        Spanned::new(parse_expression(p).unwrap(), span)
-    });
+    // Parse initial value with proper error handling
+    let initial_value = match inner.next() {
+        Some(p) => {
+            let span = span_from_pair(&p);
+            let expr = parse_expression(p)?;
+            Some(Spanned::new(expr, span))
+        }
+        None => None,
+    };
 
-    Ok(VarDecl {
-        name,
-        data_type,
-        initial_value,
-        address: None,
-    })
+    // Create a VarDecl for each identifier
+    let decls = names
+        .into_iter()
+        .map(|name| VarDecl {
+            name,
+            data_type: data_type.clone(),
+            initial_value: initial_value.clone(),
+            address: None,
+        })
+        .collect();
+
+    Ok(decls)
 }
 
 fn parse_data_type(pair: Pair<Rule>) -> Result<DataType> {
@@ -910,5 +934,62 @@ mod tests {
 
         let result = parse(source);
         assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_comma_separated_vars() {
+        let source = r#"
+            PROGRAM VarTest
+            VAR
+                a, b, c : INT := 10;
+                x, y : REAL;
+            END_VAR
+                a := b + c;
+            END_PROGRAM
+        "#;
+
+        let result = parse(source);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+
+        let unit = result.unwrap();
+        match &unit.units[0].node {
+            ProgramUnit::Program(p) => {
+                assert_eq!(p.name, "VarTest");
+                assert_eq!(p.variables.len(), 1); // One VAR block
+
+                let var_block = &p.variables[0].node;
+                // Should have 5 declarations: a, b, c, x, y
+                assert_eq!(
+                    var_block.declarations.len(),
+                    5,
+                    "Expected 5 declarations (a, b, c, x, y), got {}",
+                    var_block.declarations.len()
+                );
+
+                // Check that a, b, c all have the same type and initial value
+                let names: Vec<&str> = var_block
+                    .declarations
+                    .iter()
+                    .map(|d| d.node.name.as_str())
+                    .collect();
+                assert!(names.contains(&"a"));
+                assert!(names.contains(&"b"));
+                assert!(names.contains(&"c"));
+                assert!(names.contains(&"x"));
+                assert!(names.contains(&"y"));
+
+                // Verify types
+                for decl in &var_block.declarations {
+                    if ["a", "b", "c"].contains(&decl.node.name.as_str()) {
+                        assert_eq!(decl.node.data_type, DataType::Int);
+                        assert!(decl.node.initial_value.is_some());
+                    } else {
+                        assert_eq!(decl.node.data_type, DataType::Real);
+                        assert!(decl.node.initial_value.is_none());
+                    }
+                }
+            }
+            _ => panic!("Expected Program"),
+        }
     }
 }

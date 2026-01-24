@@ -13,11 +13,26 @@ use crate::frontend::{
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
+/// Information about a function signature.
+#[derive(Debug, Clone)]
+pub struct FunctionSignature {
+    /// Function name.
+    pub name: String,
+    /// Return type.
+    pub return_type: DataType,
+    /// Parameter types.
+    pub params: Vec<DataType>,
+    /// Whether this is a user-defined function (vs host import).
+    pub is_user_defined: bool,
+}
+
 /// A typed compilation unit.
 #[derive(Debug, Clone)]
 pub struct TypedUnit {
     /// Typed program units.
     pub units: Vec<TypedPou>,
+    /// Function signatures for all defined functions.
+    pub functions: HashMap<String, FunctionSignature>,
 }
 
 /// A typed Program Organization Unit.
@@ -174,6 +189,8 @@ pub enum TypedStatement {
         name: String,
         /// Arguments.
         arguments: Vec<TypedExpr>,
+        /// Whether this is a user-defined function (vs host import).
+        is_user_defined: bool,
     },
     /// Empty statement.
     Empty,
@@ -240,6 +257,8 @@ pub enum TypedExprKind {
         name: String,
         /// Arguments.
         arguments: Vec<TypedExpr>,
+        /// Whether this is a user-defined function (vs host import).
+        is_user_defined: bool,
     },
 }
 
@@ -270,20 +289,110 @@ struct TypeChecker {
     symbols: SymbolTable,
     /// Next available byte offset for variables.
     next_offset: usize,
+    /// Known function signatures (both user-defined and host imports).
+    functions: HashMap<String, FunctionSignature>,
 }
 
 impl TypeChecker {
     fn new() -> Self {
+        let mut functions = HashMap::new();
+
+        // Register built-in host functions
+        functions.insert(
+            "read_di".to_string(),
+            FunctionSignature {
+                name: "read_di".to_string(),
+                return_type: DataType::Int,
+                params: vec![DataType::Int],
+                is_user_defined: false,
+            },
+        );
+        functions.insert(
+            "write_do".to_string(),
+            FunctionSignature {
+                name: "write_do".to_string(),
+                return_type: DataType::Bool, // void, but we use Bool
+                params: vec![DataType::Int, DataType::Int],
+                is_user_defined: false,
+            },
+        );
+        functions.insert(
+            "read_ai".to_string(),
+            FunctionSignature {
+                name: "read_ai".to_string(),
+                return_type: DataType::Int,
+                params: vec![DataType::Int],
+                is_user_defined: false,
+            },
+        );
+        functions.insert(
+            "write_ao".to_string(),
+            FunctionSignature {
+                name: "write_ao".to_string(),
+                return_type: DataType::Bool,
+                params: vec![DataType::Int, DataType::Int],
+                is_user_defined: false,
+            },
+        );
+        functions.insert(
+            "get_cycle_time".to_string(),
+            FunctionSignature {
+                name: "get_cycle_time".to_string(),
+                return_type: DataType::Int,
+                params: vec![],
+                is_user_defined: false,
+            },
+        );
+
         Self {
             symbols: SymbolTable::default(),
             // Start after process image area (0x100 bytes reserved)
             next_offset: 0x100,
+            functions,
         }
     }
 
     fn check_unit(&mut self, ast: &CompilationUnit) -> Result<TypedUnit> {
-        let mut units = Vec::new();
+        // First pass: collect all function signatures
+        for spanned_unit in &ast.units {
+            match &spanned_unit.node {
+                ProgramUnit::Function(f) => {
+                    let params: Vec<DataType> = f
+                        .variables
+                        .iter()
+                        .filter(|vb| vb.node.kind == VarBlockKind::Input)
+                        .flat_map(|vb| vb.node.declarations.iter())
+                        .map(|d| d.node.data_type.clone())
+                        .collect();
 
+                    self.functions.insert(
+                        f.name.clone(),
+                        FunctionSignature {
+                            name: f.name.clone(),
+                            return_type: f.return_type.clone(),
+                            params,
+                            is_user_defined: true,
+                        },
+                    );
+                }
+                ProgramUnit::FunctionBlock(fb) => {
+                    // Function blocks are also callable
+                    self.functions.insert(
+                        fb.name.clone(),
+                        FunctionSignature {
+                            name: fb.name.clone(),
+                            return_type: DataType::Bool, // FBs don't return values directly
+                            params: vec![],
+                            is_user_defined: true,
+                        },
+                    );
+                }
+                ProgramUnit::Program(_) => {}
+            }
+        }
+
+        // Second pass: type check all units
+        let mut units = Vec::new();
         for spanned_unit in &ast.units {
             let typed = match &spanned_unit.node {
                 ProgramUnit::Program(p) => TypedPou::Program(self.check_program(p)?),
@@ -295,7 +404,10 @@ impl TypeChecker {
             units.push(typed);
         }
 
-        Ok(TypedUnit { units })
+        Ok(TypedUnit {
+            units,
+            functions: self.functions.clone(),
+        })
     }
 
     fn check_program(&mut self, program: &Program) -> Result<TypedProgram> {
@@ -451,9 +563,18 @@ impl TypeChecker {
                     .iter()
                     .map(|a| self.check_expr(&a.value.node))
                     .collect();
+
+                // Look up function to determine if user-defined or host
+                let is_user_defined = self
+                    .functions
+                    .get(&call.name)
+                    .map(|f| f.is_user_defined)
+                    .unwrap_or(false);
+
                 Ok(Some(TypedStatement::Call {
                     name: call.name.clone(),
                     arguments: args?,
+                    is_user_defined,
                 }))
             }
             Statement::Empty => Ok(Some(TypedStatement::Empty)),
@@ -627,7 +748,13 @@ impl TypeChecker {
             Expression::Unary { op, operand } => {
                 let operand_typed = self.check_expr(&operand.node)?;
                 let result_type = match op {
-                    UnaryOp::Not => DataType::Bool,
+                    UnaryOp::Not => {
+                        // NOT operator requires BOOL operand (logical negation)
+                        // Note: IEC 61131-3 also allows NOT on bit types (BYTE, WORD, etc.)
+                        // for bitwise negation, but we enforce BOOL-only for now
+                        self.expect_bool(&operand_typed.ty)?;
+                        DataType::Bool
+                    }
                     UnaryOp::Neg => operand_typed.ty.clone(),
                 };
 
@@ -643,13 +770,20 @@ impl TypeChecker {
                 let args: Result<Vec<_>> =
                     arguments.iter().map(|a| self.check_expr(&a.value.node)).collect();
 
-                // For now, assume function returns INT
+                // Look up function signature to get return type and user-defined status
+                let (return_type, is_user_defined) = self
+                    .functions
+                    .get(name)
+                    .map(|f| (f.return_type.clone(), f.is_user_defined))
+                    .unwrap_or((DataType::Int, false)); // Default to INT for unknown functions
+
                 Ok(TypedExpr {
                     kind: TypedExprKind::Call {
                         name: name.clone(),
                         arguments: args?,
+                        is_user_defined,
                     },
-                    ty: DataType::Int,
+                    ty: return_type,
                 })
             }
             Expression::Paren(inner) => self.check_expr(&inner.node),
@@ -832,5 +966,44 @@ mod tests {
         let ast = parse(source).unwrap();
         let result = check(&ast);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_not_operator_requires_bool() {
+        // Valid: NOT with BOOL operand
+        let valid_source = r#"
+            PROGRAM Test
+            VAR
+                flag : BOOL;
+                result : BOOL;
+            END_VAR
+                result := NOT flag;
+            END_PROGRAM
+        "#;
+
+        let ast = parse(valid_source).unwrap();
+        let result = check(&ast);
+        assert!(result.is_ok(), "NOT with BOOL should succeed");
+
+        // Invalid: NOT with INT operand
+        let invalid_source = r#"
+            PROGRAM Test
+            VAR
+                count : INT;
+                result : BOOL;
+            END_VAR
+                result := NOT count;
+            END_PROGRAM
+        "#;
+
+        let ast = parse(invalid_source).unwrap();
+        let result = check(&ast);
+        assert!(result.is_err(), "NOT with INT should fail");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Expected BOOL"),
+            "Error should mention BOOL, got: {}",
+            err_msg
+        );
     }
 }

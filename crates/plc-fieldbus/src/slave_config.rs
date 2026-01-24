@@ -460,6 +460,16 @@ impl NetworkConfig {
     pub fn get_slave_mut(&mut self, position: u16) -> Option<&mut SlaveConfig> {
         self.slaves.get_mut(&position)
     }
+
+    /// Clear all slaves and reset sizes.
+    ///
+    /// This should be called before re-scanning the network to ensure
+    /// stale slaves are not retained.
+    pub fn clear(&mut self) {
+        self.slaves.clear();
+        self.total_input_size = 0;
+        self.total_output_size = 0;
+    }
 }
 
 #[cfg(test)]

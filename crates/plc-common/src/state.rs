@@ -54,7 +54,8 @@ impl RuntimeState {
             (Boot, Init)
                 | (Init, PreOp)
                 | (PreOp, Run)
-                // Fault transitions (allowed from operational states)
+                // Fault transitions (allowed from any operational or startup state)
+                | (Boot, Fault)  // Boot failures (e.g., hardware init failed)
                 | (Init, Fault)
                 | (PreOp, Fault)
                 | (Run, Fault)
@@ -240,5 +241,19 @@ mod tests {
         sm.enter_fault();
         assert_eq!(sm.state(), RuntimeState::Fault);
         assert_eq!(sm.previous_state(), Some(RuntimeState::PreOp));
+    }
+
+    #[test]
+    fn test_boot_to_fault() {
+        // Boot failures should be able to transition directly to Fault
+        let mut sm = StateMachine::new();
+        assert_eq!(sm.state(), RuntimeState::Boot);
+
+        // Boot -> Fault is valid (e.g., hardware init failed)
+        assert!(sm.transition(RuntimeState::Fault).is_ok());
+        assert_eq!(sm.state(), RuntimeState::Fault);
+
+        // Can recover from fault
+        assert!(sm.transition(RuntimeState::Init).is_ok());
     }
 }

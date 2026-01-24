@@ -18,6 +18,24 @@ pub use slave_config::*;
 
 use plc_common::PlcResult;
 
+/// Input data from fieldbus (simplified for cross-crate use).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FieldbusInputs {
+    /// Digital inputs (32 bits).
+    pub digital: u32,
+    /// Analog inputs (16 channels).
+    pub analog: [i16; 16],
+}
+
+/// Output data to fieldbus (simplified for cross-crate use).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FieldbusOutputs {
+    /// Digital outputs (32 bits).
+    pub digital: u32,
+    /// Analog outputs (16 channels).
+    pub analog: [i16; 16],
+}
+
 /// Fieldbus driver abstraction.
 ///
 /// This trait defines the interface for all fieldbus drivers,
@@ -55,6 +73,20 @@ pub trait FieldbusDriver: Send {
         self.write_outputs()
     }
 
+    /// Get the current input values from the fieldbus.
+    ///
+    /// Called after `exchange()` to retrieve inputs for the logic engine.
+    fn get_inputs(&self) -> FieldbusInputs {
+        FieldbusInputs::default()
+    }
+
+    /// Set output values to be sent to the fieldbus.
+    ///
+    /// Called before `exchange()` to provide outputs from the logic engine.
+    fn set_outputs(&mut self, _outputs: &FieldbusOutputs) {
+        // Default: no-op
+    }
+
     /// Shutdown the fieldbus driver gracefully.
     ///
     /// Should transition slaves to a safe state and release resources.
@@ -79,16 +111,34 @@ pub enum DriverKind {
 
 /// Simulated fieldbus driver for testing.
 ///
-/// Provides a no-op implementation that always succeeds.
+/// Provides a basic implementation that stores I/O values in memory.
 #[derive(Debug, Default)]
 pub struct SimulatedDriver {
     initialized: bool,
+    /// Simulated input values.
+    inputs: FieldbusInputs,
+    /// Simulated output values.
+    outputs: FieldbusOutputs,
 }
 
 impl SimulatedDriver {
     /// Create a new simulated driver.
     pub fn new() -> Self {
-        Self { initialized: false }
+        Self {
+            initialized: false,
+            inputs: FieldbusInputs::default(),
+            outputs: FieldbusOutputs::default(),
+        }
+    }
+
+    /// Set simulated input values (for testing).
+    pub fn set_simulated_inputs(&mut self, inputs: FieldbusInputs) {
+        self.inputs = inputs;
+    }
+
+    /// Get the last written output values (for testing).
+    pub fn get_simulated_outputs(&self) -> FieldbusOutputs {
+        self.outputs
     }
 }
 
@@ -104,6 +154,14 @@ impl FieldbusDriver for SimulatedDriver {
 
     fn write_outputs(&mut self) -> PlcResult<()> {
         Ok(())
+    }
+
+    fn get_inputs(&self) -> FieldbusInputs {
+        self.inputs
+    }
+
+    fn set_outputs(&mut self, outputs: &FieldbusOutputs) {
+        self.outputs = *outputs;
     }
 
     fn shutdown(&mut self) -> PlcResult<()> {

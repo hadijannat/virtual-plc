@@ -186,10 +186,25 @@ impl DcSystemTime {
     /// Get the expected DC time for now.
     pub fn expected_dc_time(&self) -> u64 {
         let elapsed = self.reference_instant.elapsed();
-        let expected = self.dc_time_at_reference
-            .wrapping_add(elapsed.as_nanos() as u64)
-            .wrapping_add(self.drift_correction_ns as u64);
-        expected
+
+        // Use i128 for intermediate math to safely handle:
+        // - Large DC times (up to 2^64 ns ≈ 584 years)
+        // - Negative drift corrections
+        // - Addition without overflow
+        let base_time = self.dc_time_at_reference as i128;
+        let elapsed_ns = elapsed.as_nanos() as i128;
+        let drift = self.drift_correction_ns as i128;
+
+        let expected = base_time + elapsed_ns + drift;
+
+        // Clamp to valid u64 range (DC time can't be negative)
+        if expected < 0 {
+            0
+        } else if expected > u64::MAX as i128 {
+            u64::MAX
+        } else {
+            expected as u64
+        }
     }
 
     /// Update with a measured DC time from the reference clock.
@@ -346,6 +361,7 @@ impl DcController {
     pub fn initialize(&mut self, initial_dc_time: u64) -> PlcResult<()> {
         if self.reference_clock.is_none() {
             warn!("No DC-capable slaves found, DC synchronization disabled");
+            self.active = false;
             return Ok(());
         }
 
@@ -418,6 +434,18 @@ impl DcController {
     pub fn get_slave_config(&self, position: u16) -> Option<&DcSlaveConfig> {
         self.slaves.iter().find(|s| s.position == position)
     }
+
+    /// Clear all slaves and reset DC state.
+    ///
+    /// This should be called before re-scanning the network to ensure
+    /// stale DC configuration is not retained.
+    pub fn clear(&mut self) {
+        self.slaves.clear();
+        self.reference_clock = None;
+        self.active = false;
+        self.stats.reset();
+        self.system_time = DcSystemTime::new();
+    }
 }
 
 #[cfg(test)]
@@ -452,6 +480,35 @@ mod tests {
         let expected = sys_time.expected_dc_time();
         assert!(expected >= 1_000_000_000);
         assert!(expected < 1_100_000_000); // Within 100ms
+    }
+
+    #[test]
+    fn test_dc_system_time_negative_drift() {
+        let mut sys_time = DcSystemTime::new();
+        sys_time.initialize(1_000_000_000); // 1 second in ns
+
+        // Simulate negative drift correction (clock running slow)
+        sys_time.drift_correction_ns = -500_000; // -500µs
+
+        // Expected time should be less than base time + elapsed
+        let expected = sys_time.expected_dc_time();
+        // Should be approximately 1_000_000_000 - 500_000 = 999_500_000
+        // (plus a tiny elapsed time from test execution)
+        assert!(expected >= 999_000_000); // Within reasonable bounds
+        assert!(expected < 1_000_000_000 + 100_000_000); // Not huge from overflow
+    }
+
+    #[test]
+    fn test_dc_system_time_negative_result_clamps() {
+        let mut sys_time = DcSystemTime::new();
+        sys_time.initialize(100); // Very small initial time
+
+        // Apply a large negative drift that would make the result negative
+        sys_time.drift_correction_ns = -1_000_000_000; // -1 second
+
+        // Result should clamp to 0, not wrap around to a huge number
+        let expected = sys_time.expected_dc_time();
+        assert_eq!(expected, 0);
     }
 
     #[test]
@@ -495,5 +552,38 @@ mod tests {
         // Second DC-capable slave doesn't change reference
         dc.add_slave(DcSlaveConfig::new(2).with_sync0(1_000_000));
         assert_eq!(dc.reference_clock(), Some(1));
+    }
+
+    #[test]
+    fn test_dc_controller_active_flag_without_reference_clock() {
+        let mut dc = DcController::new(Duration::from_millis(1));
+
+        // No DC-capable slaves added
+        dc.add_slave(DcSlaveConfig::new(0)); // Non-DC slave
+        assert!(dc.reference_clock().is_none());
+        assert!(!dc.is_active());
+
+        // Initialize without reference clock should explicitly set active = false
+        dc.initialize(1_000_000).unwrap();
+        assert!(!dc.is_active());
+    }
+
+    #[test]
+    fn test_dc_controller_reinitialize_without_reference_clock() {
+        let mut dc = DcController::new(Duration::from_millis(1));
+
+        // Add DC-capable slave and initialize
+        dc.add_slave(DcSlaveConfig::new(0).with_sync0(1_000_000));
+        dc.initialize(1_000_000).unwrap();
+        assert!(dc.is_active());
+
+        // Clear and add only non-DC slave
+        dc.clear();
+        dc.add_slave(DcSlaveConfig::new(0)); // Non-DC slave
+        assert!(dc.reference_clock().is_none());
+
+        // Re-initialize should deactivate DC
+        dc.initialize(1_000_000).unwrap();
+        assert!(!dc.is_active());
     }
 }

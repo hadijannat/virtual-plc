@@ -52,8 +52,9 @@ pub const AO_CHANNELS: usize = 16;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WasmSystemInfo {
-    /// Cycle time in nanoseconds.
-    pub cycle_time_ns: u32,
+    /// Cycle time in nanoseconds (u64 to prevent overflow for cycles > 4.29s).
+    /// Note: When serialized to Wasm memory, this is truncated to u32 for ABI compatibility.
+    pub cycle_time_ns: u64,
     /// Runtime flags (bit 0 = first cycle, bit 1 = fault mode).
     pub flags: u32,
 }
@@ -118,11 +119,16 @@ pub fn copy_outputs_from_wasm(memory: &[u8], data: &mut ProcessData) {
 }
 
 /// Write system info to Wasm linear memory.
+///
+/// Note: cycle_time_ns is truncated to u32 for Wasm ABI compatibility.
+/// Values > u32::MAX (~4.29 seconds) are capped at u32::MAX.
 #[inline]
 pub fn write_system_info(memory: &mut [u8], info: &WasmSystemInfo) {
     let offset = WASM_SYSINFO_OFFSET as usize;
     if memory.len() >= offset + 8 {
-        memory[offset..offset + 4].copy_from_slice(&info.cycle_time_ns.to_le_bytes());
+        // Truncate cycle_time_ns to u32 for ABI compatibility (capped at u32::MAX)
+        let cycle_time_u32 = info.cycle_time_ns.min(u32::MAX as u64) as u32;
+        memory[offset..offset + 4].copy_from_slice(&cycle_time_u32.to_le_bytes());
         memory[offset + 4..offset + 8].copy_from_slice(&info.flags.to_le_bytes());
     }
 }

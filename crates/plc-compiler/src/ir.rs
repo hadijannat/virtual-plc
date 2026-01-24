@@ -249,8 +249,10 @@ pub enum Instruction {
     // Function calls
     /// Call function by index.
     Call(u32),
-    /// Call host function.
+    /// Call host function (imported).
     CallHost(String),
+    /// Call user-defined function (by name, resolved later).
+    CallUser(String),
 
     // Stack manipulation
     /// Drop top of stack.
@@ -273,6 +275,8 @@ struct IrLowerer {
     functions: Vec<IrFunction>,
     /// Current function's instructions.
     current_body: Vec<Instruction>,
+    /// Current function's local variables.
+    current_locals: Vec<LocalVar>,
     /// Current nesting depth for break/continue.
     loop_depth: u32,
     /// Memory size.
@@ -284,9 +288,20 @@ impl IrLowerer {
         Self {
             functions: Vec::new(),
             current_body: Vec::new(),
+            current_locals: Vec::new(),
             loop_depth: 0,
             memory_size: 0x1000, // 4KB default
         }
+    }
+
+    /// Allocate a temporary local variable and return its index.
+    fn alloc_temp_local(&mut self, wasm_type: WasmType) -> u32 {
+        let idx = self.current_locals.len() as u32;
+        self.current_locals.push(LocalVar {
+            name: format!("__temp_{}", idx),
+            wasm_type,
+        });
+        idx
     }
 
     fn lower_unit(&mut self, typed: &TypedUnit) -> Result<Module> {
@@ -307,6 +322,7 @@ impl IrLowerer {
 
     fn lower_program(&mut self, program: &TypedProgram) -> Result<()> {
         self.current_body.clear();
+        self.current_locals.clear();
 
         // Lower all statements
         for stmt in &program.body {
@@ -317,7 +333,7 @@ impl IrLowerer {
         let step_fn = IrFunction {
             name: "step".to_string(),
             is_step: true,
-            locals: Vec::new(),
+            locals: std::mem::take(&mut self.current_locals),
             body: std::mem::take(&mut self.current_body),
         };
 
@@ -327,6 +343,7 @@ impl IrLowerer {
 
     fn lower_function_block(&mut self, fb: &TypedFunctionBlock) -> Result<()> {
         self.current_body.clear();
+        self.current_locals.clear();
 
         for stmt in &fb.body {
             self.lower_statement(stmt)?;
@@ -335,7 +352,7 @@ impl IrLowerer {
         let func = IrFunction {
             name: fb.name.clone(),
             is_step: false,
-            locals: Vec::new(),
+            locals: std::mem::take(&mut self.current_locals),
             body: std::mem::take(&mut self.current_body),
         };
 
@@ -345,6 +362,7 @@ impl IrLowerer {
 
     fn lower_function(&mut self, func: &TypedFunction) -> Result<()> {
         self.current_body.clear();
+        self.current_locals.clear();
 
         for stmt in &func.body {
             self.lower_statement(stmt)?;
@@ -353,7 +371,7 @@ impl IrLowerer {
         let ir_func = IrFunction {
             name: func.name.clone(),
             is_step: false,
-            locals: Vec::new(),
+            locals: std::mem::take(&mut self.current_locals),
             body: std::mem::take(&mut self.current_body),
         };
 
@@ -417,12 +435,19 @@ impl IrLowerer {
                 }
                 self.current_body.push(Instruction::Return);
             }
-            TypedStatement::Call { name, arguments } => {
+            TypedStatement::Call {
+                name,
+                arguments,
+                is_user_defined,
+            } => {
                 for arg in arguments {
                     self.lower_expr(arg)?;
                 }
-                self.current_body
-                    .push(Instruction::CallHost(name.clone()));
+                if *is_user_defined {
+                    self.current_body.push(Instruction::CallUser(name.clone()));
+                } else {
+                    self.current_body.push(Instruction::CallHost(name.clone()));
+                }
                 // Drop result if any
                 self.current_body.push(Instruction::Drop);
             }
@@ -591,14 +616,19 @@ impl IrLowerer {
         branches: &[(Vec<i64>, Vec<TypedStatement>)],
         else_branch: &Option<Vec<TypedStatement>>,
     ) -> Result<()> {
-        // Simplified: evaluate selector once, use local
+        // Allocate a temp local for the selector value
+        let selector_local = self.alloc_temp_local(WasmType::I32);
+
+        // Evaluate selector once and store in local
         self.lower_expr(selector)?;
-        self.current_body.push(Instruction::LocalSet(0)); // Assume local 0
+        self.current_body
+            .push(Instruction::LocalSet(selector_local));
 
         for (values, stmts) in branches {
             if !values.is_empty() {
                 // Check first value
-                self.current_body.push(Instruction::LocalGet(0));
+                self.current_body
+                    .push(Instruction::LocalGet(selector_local));
                 self.current_body
                     .push(Instruction::I32Const(values[0] as i32));
                 self.current_body.push(Instruction::I32Eq);
@@ -659,11 +689,19 @@ impl IrLowerer {
                 self.lower_expr(operand)?;
                 self.emit_unary_op(*op, &operand.ty)?;
             }
-            TypedExprKind::Call { name, arguments } => {
+            TypedExprKind::Call {
+                name,
+                arguments,
+                is_user_defined,
+            } => {
                 for arg in arguments {
                     self.lower_expr(arg)?;
                 }
-                self.current_body.push(Instruction::CallHost(name.clone()));
+                if *is_user_defined {
+                    self.current_body.push(Instruction::CallUser(name.clone()));
+                } else {
+                    self.current_body.push(Instruction::CallHost(name.clone()));
+                }
             }
         }
         Ok(())

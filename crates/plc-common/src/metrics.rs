@@ -140,10 +140,15 @@ impl CycleMetrics {
     ///
     /// * `percentile` - Percentile to compute (0.0 to 100.0).
     ///
-    /// Returns `None` if no samples have been collected.
+    /// Returns `None` if no samples have been collected or if percentile is out of range.
     #[must_use]
     pub fn percentile(&self, percentile: f64) -> Option<Duration> {
         if self.sample_count == 0 {
+            return None;
+        }
+
+        // Validate percentile range
+        if percentile < 0.0 || percentile > 100.0 || percentile.is_nan() {
             return None;
         }
 
@@ -164,6 +169,7 @@ impl CycleMetrics {
     /// * `percentiles` - Slice of percentiles to compute (0.0 to 100.0).
     ///
     /// Returns a vector of (percentile, duration) pairs.
+    /// Invalid percentiles (< 0, > 100, or NaN) are skipped.
     #[must_use]
     pub fn percentiles(&self, percentiles: &[f64]) -> Vec<(f64, Duration)> {
         if self.sample_count == 0 {
@@ -175,6 +181,7 @@ impl CycleMetrics {
 
         percentiles
             .iter()
+            .filter(|&&p| p >= 0.0 && p <= 100.0 && !p.is_nan())
             .map(|&p| {
                 let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
                 let idx = idx.min(sorted.len() - 1);
@@ -336,5 +343,42 @@ mod tests {
         assert_eq!(snap.min_ns, Some(400_000));
         assert_eq!(snap.max_ns, Some(600_000));
         assert_eq!(snap.jitter_ns(), Some(200_000));
+    }
+
+    #[test]
+    fn test_percentile_validation() {
+        let mut metrics = CycleMetrics::new(100, Duration::from_millis(1));
+
+        // Record some samples
+        for i in 1..=10 {
+            metrics.record(Duration::from_micros(i));
+        }
+
+        // Valid percentiles should work
+        assert!(metrics.percentile(0.0).is_some());
+        assert!(metrics.percentile(50.0).is_some());
+        assert!(metrics.percentile(100.0).is_some());
+
+        // Invalid percentiles should return None
+        assert!(metrics.percentile(-1.0).is_none());
+        assert!(metrics.percentile(101.0).is_none());
+        assert!(metrics.percentile(f64::NAN).is_none());
+        assert!(metrics.percentile(f64::INFINITY).is_none());
+        assert!(metrics.percentile(f64::NEG_INFINITY).is_none());
+    }
+
+    #[test]
+    fn test_percentiles_validation() {
+        let mut metrics = CycleMetrics::new(100, Duration::from_millis(1));
+
+        for i in 1..=10 {
+            metrics.record(Duration::from_micros(i));
+        }
+
+        // Mix of valid and invalid percentiles - only valid ones returned
+        let results = metrics.percentiles(&[-10.0, 50.0, 150.0, 99.0, f64::NAN]);
+        assert_eq!(results.len(), 2); // Only 50.0 and 99.0 are valid
+        assert_eq!(results[0].0, 50.0);
+        assert_eq!(results[1].0, 99.0);
     }
 }

@@ -222,6 +222,7 @@ pub enum FieldbusDriver {
     /// EtherCAT via SOEM.
     EtherCAT,
     /// Modbus TCP.
+    #[serde(rename = "modbus_tcp")]
     ModbusTcp,
 }
 
@@ -441,5 +442,23 @@ mod tests {
         let toml = config.to_toml().unwrap();
         let parsed = RuntimeConfig::from_toml(&toml).unwrap();
         assert_eq!(config.cycle_time, parsed.cycle_time);
+    }
+
+    #[test]
+    fn test_modbus_tcp_driver_name() {
+        // Test that modbus_tcp is the correct TOML name (with underscore)
+        let toml = r#"
+            [fieldbus]
+            driver = "modbus_tcp"
+        "#;
+
+        let config = RuntimeConfig::from_toml(toml).unwrap();
+        assert_eq!(config.fieldbus.driver, FieldbusDriver::ModbusTcp);
+
+        // Test serialization produces correct name
+        let mut config = RuntimeConfig::default();
+        config.fieldbus.driver = FieldbusDriver::ModbusTcp;
+        let serialized = config.to_toml().unwrap();
+        assert!(serialized.contains("modbus_tcp"), "Expected 'modbus_tcp' in serialized TOML: {}", serialized);
     }
 }

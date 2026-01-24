@@ -164,13 +164,23 @@ impl SignalHandler {
         });
 
         // Set up actual signal handlers using libc
+        // Check return values for SIG_ERR to detect registration failures
         unsafe {
             // SIGTERM handler
-            libc::signal(libc::SIGTERM, sigterm_handler as libc::sighandler_t);
+            let prev = libc::signal(libc::SIGTERM, sigterm_handler as libc::sighandler_t);
+            if prev == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
             // SIGINT handler
-            libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t);
+            let prev = libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t);
+            if prev == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
             // SIGHUP handler
-            libc::signal(libc::SIGHUP, sighup_handler as libc::sighandler_t);
+            let prev = libc::signal(libc::SIGHUP, sighup_handler as libc::sighandler_t);
+            if prev == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
         }
 
         extern "C" fn sigterm_handler(_: c_int) {

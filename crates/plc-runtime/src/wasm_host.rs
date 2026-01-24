@@ -29,8 +29,9 @@ use crate::wasm_memory::{
 };
 use anyhow::{anyhow, Context, Result};
 use plc_common::error::{PlcError, PlcResult};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tracing::{debug, info, trace, warn};
 use wasmtime::{Config, Engine, Instance, Linker, Memory, Module, OptLevel, Store, TypedFunc};
@@ -59,6 +60,69 @@ pub trait LogicEngine: Send {
 
     /// Check if the engine is ready to execute.
     fn is_ready(&self) -> bool;
+
+    /// Start the epoch ticker for timeout enforcement.
+    ///
+    /// Returns an `EpochTicker` handle that must be kept alive for the ticker
+    /// to continue running. Dropping the handle stops the ticker.
+    ///
+    /// The default implementation returns `None` (no epoch support).
+    fn start_epoch_ticker(&self) -> Option<EpochTicker> {
+        None
+    }
+}
+
+/// Handle for an epoch ticker thread.
+///
+/// The ticker runs in a background thread and increments the engine's epoch
+/// counter at a fixed interval. Dropping this handle stops the ticker.
+pub struct EpochTicker {
+    stop_flag: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl EpochTicker {
+    /// Create and start a new epoch ticker.
+    ///
+    /// The `tick_fn` is called at the specified `interval` until the ticker is stopped.
+    pub fn new<F>(interval: Duration, tick_fn: F) -> Self
+    where
+        F: Fn() + Send + 'static,
+    {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_flag_clone = Arc::clone(&stop_flag);
+
+        let handle = thread::Builder::new()
+            .name("epoch-ticker".into())
+            .spawn(move || {
+                debug!("Epoch ticker thread started, interval: {:?}", interval);
+                while !stop_flag_clone.load(Ordering::Acquire) {
+                    tick_fn();
+                    thread::sleep(interval);
+                }
+                debug!("Epoch ticker thread stopped");
+            })
+            .expect("Failed to spawn epoch ticker thread");
+
+        Self {
+            stop_flag,
+            handle: Some(handle),
+        }
+    }
+
+    /// Stop the ticker and wait for the thread to finish.
+    pub fn stop(&mut self) {
+        self.stop_flag.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for EpochTicker {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 /// Wasmtime-based logic engine with epoch interruption support.
@@ -85,8 +149,8 @@ pub struct WasmtimeHost {
     epoch_counter: Arc<AtomicU64>,
     /// Maximum epochs per cycle (timeout control).
     max_epochs_per_cycle: u64,
-    /// Cycle time in nanoseconds.
-    cycle_time_ns: u32,
+    /// Cycle time in nanoseconds (u64 to prevent overflow for cycles > 4.29s).
+    cycle_time_ns: u64,
     /// Whether the engine has been initialized.
     initialized: bool,
     /// Local copy of process data for step().
@@ -128,7 +192,8 @@ impl WasmtimeHost {
         let engine = Engine::new(&config).context("Failed to create Wasmtime engine")?;
 
         // Create store with host state
-        let cycle_time_ns = cycle_time.as_nanos() as u32;
+        // Use u64 to prevent overflow for cycle times > 4.29s
+        let cycle_time_ns = cycle_time.as_nanos() as u64;
         let host_state = HostState::new(cycle_time_ns);
 
         let store = Store::new(&engine, host_state);
@@ -243,8 +308,12 @@ impl WasmtimeHost {
     }
 
     /// Increment the epoch counter (call from timer thread).
+    ///
+    /// This increments both the Wasmtime engine's epoch and our local counter.
+    /// The local counter is used to calculate deadlines for cycle timeouts.
     pub fn increment_epoch(&self) {
         self.engine.increment_epoch();
+        self.epoch_counter.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Get a handle to the epoch counter for external control.
@@ -403,6 +472,26 @@ impl LogicEngine for WasmtimeHost {
 
     fn is_ready(&self) -> bool {
         self.initialized && self.instance.is_some()
+    }
+
+    fn start_epoch_ticker(&self) -> Option<EpochTicker> {
+        // Clone the engine (internally Arc-based) for the ticker thread
+        let engine = self.engine.clone();
+        let epoch_counter = Arc::clone(&self.epoch_counter);
+
+        // Tick interval: roughly 10µs per epoch as estimated in constructor
+        // This allows fine-grained timeout control
+        let tick_interval = Duration::from_micros(10);
+
+        info!(
+            tick_interval_us = tick_interval.as_micros(),
+            "Starting epoch ticker"
+        );
+
+        Some(EpochTicker::new(tick_interval, move || {
+            engine.increment_epoch();
+            epoch_counter.fetch_add(1, Ordering::Relaxed);
+        }))
     }
 }
 

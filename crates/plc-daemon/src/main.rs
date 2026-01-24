@@ -208,6 +208,13 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
     scheduler.initialize().context("Failed to initialize scheduler")?;
     info!("Scheduler initialized");
 
+    // Start epoch ticker for Wasm timeout enforcement
+    // The ticker must be kept alive for the duration of the main loop
+    let _epoch_ticker = scheduler.engine.start_epoch_ticker();
+    if _epoch_ticker.is_some() {
+        info!("Epoch ticker started for Wasm timeout enforcement");
+    }
+
     // Start cyclic execution
     scheduler.start().context("Failed to start scheduler")?;
     info!(
@@ -229,10 +236,29 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
             info!("Reload signal received (config reload not yet implemented)");
         }
 
-        // Perform fieldbus exchange before cycle
+        // Copy outputs from scheduler to fieldbus before exchange
+        {
+            let outputs = scheduler.io.read_outputs();
+            let fb_outputs = plc_fieldbus::FieldbusOutputs {
+                digital: outputs.digital_outputs[0],
+                analog: outputs.analog_outputs,
+            };
+            fieldbus.set_outputs(&fb_outputs);
+        }
+
+        // Perform fieldbus exchange
         if let Err(e) = fieldbus.exchange() {
             error!("Fieldbus exchange failed: {}", e);
             diagnostics.state().set_fieldbus_connected(false);
+        }
+
+        // Copy inputs from fieldbus to scheduler after exchange
+        {
+            let fb_inputs = fieldbus.get_inputs();
+            scheduler.io.write_inputs(|data| {
+                data.digital_inputs[0] = fb_inputs.digital;
+                data.analog_inputs = fb_inputs.analog;
+            });
         }
 
         // Run one PLC cycle

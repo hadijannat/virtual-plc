@@ -308,6 +308,11 @@ impl EthercatMaster {
 
         self.state = MasterState::Init;
 
+        // Clear existing configuration before re-scanning
+        // This ensures stale slaves are not retained if scan_slaves() is called multiple times
+        self.network.clear();
+        self.dc.clear();
+
         let slaves = self.transport.scan_slaves()?;
         let count = slaves.len();
 
@@ -583,6 +588,43 @@ impl FieldbusDriver for EthercatMaster {
         Ok(())
     }
 
+    fn exchange(&mut self) -> PlcResult<()> {
+        // Delegate to the inherent EthercatMaster::exchange() method
+        // which performs the actual PDO exchange with proper timing and stats
+        EthercatMaster::exchange(self)
+    }
+
+    fn get_inputs(&self) -> crate::FieldbusInputs {
+        let pi = &self.process_image;
+        let mut inputs = crate::FieldbusInputs::default();
+
+        // Read digital inputs from first byte
+        if let Some(di) = pi.read_input_byte(0) {
+            inputs.digital = u32::from(di);
+        }
+
+        // Read analog inputs (2 bytes each, little-endian)
+        for (i, ai) in inputs.analog.iter_mut().enumerate() {
+            if let Some(val) = pi.read_input_u16(1 + i * 2) {
+                *ai = val as i16;
+            }
+        }
+
+        inputs
+    }
+
+    fn set_outputs(&mut self, outputs: &crate::FieldbusOutputs) {
+        let pi = self.process_image_mut();
+
+        // Write digital outputs to first byte
+        pi.write_output_byte(0, outputs.digital as u8);
+
+        // Write analog outputs (2 bytes each, little-endian)
+        for (i, ao) in outputs.analog.iter().enumerate() {
+            pi.write_output_u16(1 + i * 2, *ao as u16);
+        }
+    }
+
     fn shutdown(&mut self) -> PlcResult<()> {
         EthercatMaster::shutdown(self)
     }
@@ -849,6 +891,26 @@ mod tests {
         let count = master.scan_slaves().unwrap();
         assert_eq!(count, 2);
         assert_eq!(master.state(), MasterState::Init);
+    }
+
+    #[test]
+    fn test_scan_slaves_is_idempotent() {
+        let config = test_config();
+        let transport = SimulatedTransport::with_test_slaves(&config);
+        let mut master = EthercatMaster::with_transport(config, Box::new(transport));
+
+        // First scan
+        let count1 = master.scan_slaves().unwrap();
+        assert_eq!(count1, 2);
+        assert_eq!(master.network().slave_count(), 2);
+
+        // Second scan should produce the same result, not accumulate
+        let count2 = master.scan_slaves().unwrap();
+        assert_eq!(count2, 2);
+        assert_eq!(master.network().slave_count(), 2);
+
+        // DC slaves should also not accumulate
+        assert_eq!(master.dc().slaves().len(), 2);
     }
 
     #[test]

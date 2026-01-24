@@ -3,7 +3,7 @@
 //! Generates Wasm binary using wasm-encoder from the IR module.
 
 use crate::ir::{Instruction, Module as IrModule};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use wasm_encoder::{
     CodeSection, ExportKind, ExportSection, Function, FunctionSection, ImportSection, Instruction as WasmInstr,
     MemorySection, MemoryType, Module, TypeSection, ValType,
@@ -99,7 +99,7 @@ impl WasmEmitter {
 
             // Emit instructions
             for instr in &func.body {
-                self.emit_instruction(&mut f, instr);
+                self.emit_instruction(&mut f, instr)?;
             }
 
             f.instruction(&WasmInstr::End);
@@ -174,7 +174,7 @@ impl WasmEmitter {
         self.next_func_idx += 1;
     }
 
-    fn emit_instruction(&self, f: &mut Function, instr: &Instruction) {
+    fn emit_instruction(&self, f: &mut Function, instr: &Instruction) -> Result<()> {
         match instr {
             // Constants
             Instruction::I32Const(v) => {
@@ -467,14 +467,18 @@ impl WasmEmitter {
                 f.instruction(&WasmInstr::Call(*idx));
             }
             Instruction::CallHost(name) => {
-                if let Some(&idx) = self.host_funcs.get(name) {
-                    f.instruction(&WasmInstr::Call(idx));
-                }
+                let idx = self
+                    .host_funcs
+                    .get(name)
+                    .ok_or_else(|| anyhow!("Unknown host function: {}", name))?;
+                f.instruction(&WasmInstr::Call(*idx));
             }
             Instruction::CallUser(name) => {
-                if let Some(&idx) = self.user_funcs.get(name) {
-                    f.instruction(&WasmInstr::Call(idx));
-                }
+                let idx = self
+                    .user_funcs
+                    .get(name)
+                    .ok_or_else(|| anyhow!("Unknown user function: {}", name))?;
+                f.instruction(&WasmInstr::Call(*idx));
             }
 
             // Stack
@@ -489,6 +493,7 @@ impl WasmEmitter {
                 f.instruction(&WasmInstr::Nop);
             }
         }
+        Ok(())
     }
 }
 

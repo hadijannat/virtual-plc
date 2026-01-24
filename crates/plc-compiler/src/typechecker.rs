@@ -665,16 +665,24 @@ impl TypeChecker {
             .branches
             .iter()
             .map(|branch| {
-                let values: Vec<i64> = branch
-                    .values
-                    .iter()
-                    .filter_map(|v| match v {
+                let mut values: Vec<i64> = Vec::new();
+                for v in &branch.values {
+                    match v {
                         crate::frontend::CaseValue::Single(e) => {
-                            self.expr_to_const(&e.node).ok()
+                            values.push(self.expr_to_const(&e.node)?);
                         }
-                        crate::frontend::CaseValue::Range(_, _) => None, // Simplified
-                    })
-                    .collect();
+                        crate::frontend::CaseValue::Range(start, end) => {
+                            // Return error for ranges until properly implemented
+                            let start_val = self.expr_to_const(&start.node)?;
+                            let end_val = self.expr_to_const(&end.node)?;
+                            return Err(anyhow!(
+                                "CASE ranges not yet supported: {}..{}",
+                                start_val,
+                                end_val
+                            ));
+                        }
+                    }
+                }
                 let stmts = self.check_statements(&branch.statements)?;
                 Ok((values, stmts))
             })
@@ -770,20 +778,19 @@ impl TypeChecker {
                 let args: Result<Vec<_>> =
                     arguments.iter().map(|a| self.check_expr(&a.value.node)).collect();
 
-                // Look up function signature to get return type and user-defined status
-                let (return_type, is_user_defined) = self
+                // Look up function signature - error if not found
+                let func_sig = self
                     .functions
                     .get(name)
-                    .map(|f| (f.return_type.clone(), f.is_user_defined))
-                    .unwrap_or((DataType::Int, false)); // Default to INT for unknown functions
+                    .ok_or_else(|| anyhow!("Unknown function: {}", name))?;
 
                 Ok(TypedExpr {
                     kind: TypedExprKind::Call {
                         name: name.clone(),
                         arguments: args?,
-                        is_user_defined,
+                        is_user_defined: func_sig.is_user_defined,
                     },
-                    ty: return_type,
+                    ty: func_sig.return_type.clone(),
                 })
             }
             Expression::Paren(inner) => self.check_expr(&inner.node),
@@ -1005,5 +1012,43 @@ mod tests {
             "Error should mention BOOL, got: {}",
             err_msg
         );
+    }
+
+    #[test]
+    fn test_unknown_function_error() {
+        let source = r#"
+            PROGRAM Test
+            VAR
+                x : INT;
+            END_VAR
+                x := unknown_func();
+            END_PROGRAM
+        "#;
+
+        let ast = parse(source).unwrap();
+        let result = check(&ast);
+        assert!(result.is_err(), "Unknown function should fail");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Unknown function"),
+            "Error should mention unknown function, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_known_host_function_succeeds() {
+        let source = r#"
+            PROGRAM Test
+            VAR
+                x : INT;
+            END_VAR
+                x := read_di(0);
+            END_PROGRAM
+        "#;
+
+        let ast = parse(source).unwrap();
+        let result = check(&ast);
+        assert!(result.is_ok(), "Known host function should succeed: {:?}", result.err());
     }
 }

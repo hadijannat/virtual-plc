@@ -375,6 +375,10 @@ impl IoImage {
     /// This method requires &mut self, so it cannot be used concurrently.
     /// Prefer `write_outputs()` for the concurrent threading model.
     #[inline]
+    #[deprecated(
+        since = "0.1.1",
+        note = "Use write_outputs() for thread-safe atomic updates via seqlock"
+    )]
     pub fn outputs_mut(&mut self) -> &mut ProcessData {
         // Since we have &mut self, no concurrent access is possible.
         // Write directly to the front buffer for immediate visibility.
@@ -398,6 +402,11 @@ impl IoImage {
 
     /// Write digital outputs word (0-31).
     #[inline]
+    #[deprecated(
+        since = "0.1.1",
+        note = "Use write_outputs() for thread-safe atomic updates via seqlock"
+    )]
+    #[allow(deprecated)]
     pub fn write_do(&mut self, value: u32) {
         self.outputs_mut().digital_outputs[0] = value;
     }
@@ -410,6 +419,11 @@ impl IoImage {
 
     /// Write a single digital output bit.
     #[inline]
+    #[deprecated(
+        since = "0.1.1",
+        note = "Use write_outputs() for thread-safe atomic updates via seqlock"
+    )]
+    #[allow(deprecated)]
     pub fn write_do_bit(&mut self, bit: usize, value: bool) {
         self.outputs_mut().write_do(bit, value);
     }
@@ -422,6 +436,11 @@ impl IoImage {
 
     /// Write an analog output channel.
     #[inline]
+    #[deprecated(
+        since = "0.1.1",
+        note = "Use write_outputs() for thread-safe atomic updates via seqlock"
+    )]
+    #[allow(deprecated)]
     pub fn write_ao(&mut self, channel: usize, value: i16) {
         self.outputs_mut().write_ao(channel, value);
     }

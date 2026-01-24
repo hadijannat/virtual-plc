@@ -314,12 +314,14 @@ impl<E: LogicEngine> Scheduler<E> {
     }
 
     /// Set all outputs to safe values (typically 0).
+    ///
+    /// Uses the seqlock-protected write_outputs() for thread-safe atomic update.
     fn set_safe_outputs(&mut self) {
         debug!("Setting outputs to safe state");
-        self.io.write_do(0);
-        for i in 0..16 {
-            self.io.write_ao(i, 0);
-        }
+        self.io.write_outputs(|outputs| {
+            outputs.digital_outputs = [0; 1];
+            outputs.analog_outputs = [0; 16];
+        });
     }
 
     /// Wait until the specified deadline using high-precision sleep.

@@ -354,9 +354,8 @@ pub fn parse_time_literal(s: &str) -> Result<i64, &'static str> {
         }
 
         if i == num_start {
-            // No number found, skip this character
-            i += 1;
-            continue;
+            // No number found - unexpected character in time literal
+            return Err("Unexpected character in time literal");
         }
 
         let num_str: String = chars[num_start..i].iter().collect();
@@ -496,5 +495,22 @@ mod tests {
     fn test_time_literal_decimal() {
         assert_eq!(parse_time_literal("T#1.5s"), Ok(1_500_000_000));
         assert_eq!(parse_time_literal("T#0.5h"), Ok(30 * 60 * 1_000_000_000));
+    }
+
+    #[test]
+    fn test_time_literal_rejects_trailing_garbage() {
+        // Should reject trailing garbage characters
+        assert!(
+            parse_time_literal("T#1sfoo").is_err(),
+            "Should reject trailing garbage 'foo'"
+        );
+        assert!(
+            parse_time_literal("T#1sxyz").is_err(),
+            "Should reject trailing garbage 'xyz'"
+        );
+        assert!(
+            parse_time_literal("T#100ms!").is_err(),
+            "Should reject trailing '!'"
+        );
     }
 }

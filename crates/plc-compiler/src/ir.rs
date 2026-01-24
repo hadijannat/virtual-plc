@@ -624,28 +624,53 @@ impl IrLowerer {
         self.current_body
             .push(Instruction::LocalSet(selector_local));
 
-        for (values, stmts) in branches {
-            if !values.is_empty() {
-                // Check first value
+        // Filter branches with values
+        let valid_branches: Vec<_> = branches
+            .iter()
+            .filter(|(values, _)| !values.is_empty())
+            .collect();
+
+        // Generate proper if-else-if chain
+        // Structure: if (cond1) { branch1 } else { if (cond2) { branch2 } else { ... else_branch } }
+        for (i, (values, stmts)) in valid_branches.iter().enumerate() {
+            // Build condition: selector == val1 || selector == val2 || ...
+            for (j, val) in values.iter().enumerate() {
                 self.current_body
                     .push(Instruction::LocalGet(selector_local));
-                self.current_body
-                    .push(Instruction::I32Const(values[0] as i32));
+                self.current_body.push(Instruction::I32Const(*val as i32));
                 self.current_body.push(Instruction::I32Eq);
-                self.current_body.push(Instruction::If);
 
-                for stmt in stmts {
-                    self.lower_statement(stmt)?;
+                // OR with previous comparisons if not the first value
+                if j > 0 {
+                    self.current_body.push(Instruction::I32Or);
                 }
+            }
 
-                self.current_body.push(Instruction::End);
+            self.current_body.push(Instruction::If);
+
+            for stmt in stmts.iter() {
+                self.lower_statement(stmt)?;
+            }
+
+            // If not the last branch, emit Else for the next branch
+            if i < valid_branches.len() - 1 {
+                self.current_body.push(Instruction::Else);
             }
         }
 
+        // Handle else branch
         if let Some(stmts) = else_branch {
+            if !valid_branches.is_empty() {
+                self.current_body.push(Instruction::Else);
+            }
             for stmt in stmts {
                 self.lower_statement(stmt)?;
             }
+        }
+
+        // Close all nested if blocks
+        for _ in 0..valid_branches.len() {
+            self.current_body.push(Instruction::End);
         }
 
         Ok(())

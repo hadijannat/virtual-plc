@@ -85,7 +85,11 @@ impl EpochTicker {
     /// Create and start a new epoch ticker.
     ///
     /// The `tick_fn` is called at the specified `interval` until the ticker is stopped.
-    pub fn new<F>(interval: Duration, tick_fn: F) -> Self
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the epoch ticker thread fails to spawn.
+    pub fn new<F>(interval: Duration, tick_fn: F) -> Result<Self, PlcError>
     where
         F: Fn() + Send + 'static,
     {
@@ -102,12 +106,12 @@ impl EpochTicker {
                 }
                 debug!("Epoch ticker thread stopped");
             })
-            .expect("Failed to spawn epoch ticker thread");
+            .map_err(|e| PlcError::Config(format!("Failed to spawn epoch ticker: {}", e)))?;
 
-        Self {
+        Ok(Self {
             stop_flag,
             handle: Some(handle),
-        }
+        })
     }
 
     /// Stop the ticker and wait for the thread to finish.
@@ -488,10 +492,16 @@ impl LogicEngine for WasmtimeHost {
             "Starting epoch ticker"
         );
 
-        Some(EpochTicker::new(tick_interval, move || {
+        match EpochTicker::new(tick_interval, move || {
             engine.increment_epoch();
             epoch_counter.fetch_add(1, Ordering::Relaxed);
-        }))
+        }) {
+            Ok(ticker) => Some(ticker),
+            Err(e) => {
+                warn!("Failed to start epoch ticker: {}", e);
+                None
+            }
+        }
     }
 }
 

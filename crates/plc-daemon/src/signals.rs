@@ -138,11 +138,47 @@ impl SignalHandler {
         static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
         static RELOAD_FLAG: AtomicBool = AtomicBool::new(false);
 
+        // Define signal handlers before registration
+        extern "C" fn sigterm_handler(_: c_int) {
+            SHUTDOWN_FLAG.store(true, Ordering::Relaxed);
+        }
+
+        extern "C" fn sigint_handler(_: c_int) {
+            SHUTDOWN_FLAG.store(true, Ordering::Relaxed);
+        }
+
+        extern "C" fn sighup_handler(_: c_int) {
+            RELOAD_FLAG.store(true, Ordering::Relaxed);
+        }
+
+        // CRITICAL: Register signal handlers FIRST before spawning the polling thread.
+        // If registration fails, we don't want an orphaned polling thread.
+        // Check return values for SIG_ERR to detect registration failures.
+        unsafe {
+            // SIGTERM handler
+            let prev = libc::signal(libc::SIGTERM, sigterm_handler as libc::sighandler_t);
+            if prev == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SIGINT handler
+            let prev = libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t);
+            if prev == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SIGHUP handler
+            let prev = libc::signal(libc::SIGHUP, sighup_handler as libc::sighandler_t);
+            if prev == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+
+        debug!("Unix signal handlers registered");
+
         // Copy our state pointers to statics that the handler can access
         // This is safe because we're setting up the handler before any signals arrive
         let state = Arc::clone(&self.state);
 
-        // Spawn a thread to poll the static flags and update our state
+        // Only spawn polling thread AFTER all signal handlers are successfully registered
         std::thread::spawn(move || {
             loop {
                 if SHUTDOWN_FLAG.swap(false, Ordering::Relaxed) {
@@ -163,39 +199,6 @@ impl SignalHandler {
             }
         });
 
-        // Set up actual signal handlers using libc
-        // Check return values for SIG_ERR to detect registration failures
-        unsafe {
-            // SIGTERM handler
-            let prev = libc::signal(libc::SIGTERM, sigterm_handler as libc::sighandler_t);
-            if prev == libc::SIG_ERR {
-                return Err(std::io::Error::last_os_error());
-            }
-            // SIGINT handler
-            let prev = libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t);
-            if prev == libc::SIG_ERR {
-                return Err(std::io::Error::last_os_error());
-            }
-            // SIGHUP handler
-            let prev = libc::signal(libc::SIGHUP, sighup_handler as libc::sighandler_t);
-            if prev == libc::SIG_ERR {
-                return Err(std::io::Error::last_os_error());
-            }
-        }
-
-        extern "C" fn sigterm_handler(_: c_int) {
-            SHUTDOWN_FLAG.store(true, Ordering::Relaxed);
-        }
-
-        extern "C" fn sigint_handler(_: c_int) {
-            SHUTDOWN_FLAG.store(true, Ordering::Relaxed);
-        }
-
-        extern "C" fn sighup_handler(_: c_int) {
-            RELOAD_FLAG.store(true, Ordering::Relaxed);
-        }
-
-        debug!("Unix signal handlers registered");
         Ok(())
     }
 

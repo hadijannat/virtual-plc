@@ -201,7 +201,7 @@ fn set_scheduler(
     policy: SchedPolicy,
     priority: u8,
 ) -> PlcResult<(Option<SchedPolicy>, Option<u8>)> {
-    use nix::sched::{sched_setaffinity, sched_setscheduler, CpuSet};
+    use nix::sched::{sched_setaffinity, CpuSet};
     use nix::unistd::Pid;
 
     let linux_policy = match policy {

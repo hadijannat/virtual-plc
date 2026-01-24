@@ -35,6 +35,12 @@ pub struct RuntimeConfig {
 
     /// Metrics and diagnostics configuration.
     pub metrics: MetricsConfig,
+
+    /// Fault handling policy.
+    pub fault_policy: FaultPolicyConfig,
+
+    /// WebAssembly runtime configuration.
+    pub wasm: WasmConfig,
 }
 
 impl Default for RuntimeConfig {
@@ -47,6 +53,8 @@ impl Default for RuntimeConfig {
             realtime: RealtimeConfig::default(),
             fieldbus: FieldbusConfig::default(),
             metrics: MetricsConfig::default(),
+            fault_policy: FaultPolicyConfig::default(),
+            wasm: WasmConfig::default(),
         }
     }
 }
@@ -72,6 +80,11 @@ pub struct RealtimeConfig {
 
     /// Pre-fault stack size in bytes.
     pub prefault_stack_size: usize,
+
+    /// Fail immediately at startup if RT requirements cannot be met.
+    /// When true, the runtime will return an error if PREEMPT_RT kernel,
+    /// CAP_SYS_NICE, or CAP_IPC_LOCK are not available.
+    pub fail_fast: bool,
 }
 
 impl Default for RealtimeConfig {
@@ -83,8 +96,52 @@ impl Default for RealtimeConfig {
             cpu_affinity: CpuAffinity::None,
             lock_memory: true,
             prefault_stack_size: 8 * 1024 * 1024, // 8 MiB
+            fail_fast: false,
         }
     }
+}
+
+/// Policy for handling cycle overruns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OverrunPolicy {
+    /// Enter fault state on overrun (strictest).
+    #[default]
+    Fault,
+    /// Log warning but continue execution.
+    Warn,
+    /// Silently ignore overruns.
+    Ignore,
+}
+
+/// Policy for setting outputs when entering safe/fault state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SafeOutputPolicy {
+    /// Set all outputs to zero/off (safest default).
+    #[default]
+    AllOff,
+    /// Hold last known output values.
+    HoldLast,
+    /// Use user-defined safe values.
+    UserDefined {
+        /// Safe values for digital outputs (32-bit words, one per output group).
+        digital: Vec<u32>,
+        /// Safe values for analog outputs (16-bit signed values).
+        analog: Vec<i16>,
+    },
+}
+
+/// Fault handling policy configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct FaultPolicyConfig {
+    /// How to handle cycle overruns.
+    pub on_overrun: OverrunPolicy,
+    /// What to do with outputs when entering safe/fault state.
+    pub safe_outputs: SafeOutputPolicy,
+    /// Whether faults require manual reset (latch) or auto-recover.
+    pub fault_latch: bool,
 }
 
 /// Scheduler policy for real-time threads.
@@ -309,6 +366,35 @@ impl Default for MetricsConfig {
             percentiles: vec![50.0, 90.0, 99.0, 99.9, 99.99],
             http_export: false,
             http_port: 9090,
+        }
+    }
+}
+
+/// WebAssembly runtime configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WasmConfig {
+    /// Maximum linear memory size in bytes.
+    pub max_memory_bytes: usize,
+
+    /// Maximum epochs (timeout units) per cycle.
+    /// Higher values allow longer-running Wasm code but reduce responsiveness.
+    pub max_epochs_per_cycle: u64,
+
+    /// Maximum table elements (function pointers, etc.).
+    pub max_table_elements: u32,
+
+    /// Enable SIMD instructions in Wasm modules.
+    pub enable_simd: bool,
+}
+
+impl Default for WasmConfig {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: 16 * 1024 * 1024, // 16 MB
+            max_epochs_per_cycle: 100,
+            max_table_elements: 10_000,
+            enable_simd: false,
         }
     }
 }

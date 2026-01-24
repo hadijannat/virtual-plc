@@ -10,7 +10,7 @@
 
 use plc_common::config::{CpuAffinity, RealtimeConfig, SchedPolicy};
 use plc_common::error::{PlcError, PlcResult};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Result of real-time initialization.
 #[derive(Debug, Clone)]
@@ -48,6 +48,12 @@ pub fn init_realtime(config: &RealtimeConfig) -> PlcResult<RealtimeStatus> {
             scheduler_priority: None,
             cpu_affinity: None,
         });
+    }
+
+    // If fail_fast is enabled, validate RT capabilities before proceeding
+    if config.fail_fast {
+        info!("Validating real-time capabilities (fail_fast=true)");
+        validate_rt_capabilities(config)?;
     }
 
     info!("Initializing real-time environment");
@@ -377,6 +383,69 @@ impl RtCapabilities {
     /// Check if memory locking is likely to succeed.
     pub fn can_lock_memory(&self) -> bool {
         self.is_root || self.memlock_limit.map_or(false, |l| l == libc::RLIM_INFINITY)
+    }
+}
+
+/// Validate that real-time capabilities are available.
+///
+/// This function is called when `fail_fast` is enabled in the realtime config.
+/// It checks for required RT capabilities and returns an error if any are missing.
+///
+/// # Errors
+///
+/// Returns an error describing which RT requirements are not met:
+/// - PREEMPT_RT kernel not detected
+/// - CAP_SYS_NICE / RLIMIT_RTPRIO not available
+/// - CAP_IPC_LOCK / RLIMIT_MEMLOCK not available
+pub fn validate_rt_capabilities(config: &RealtimeConfig) -> PlcResult<()> {
+    if !config.enabled {
+        // RT not enabled, nothing to validate
+        return Ok(());
+    }
+
+    let caps = check_rt_capabilities();
+    let mut issues = Vec::new();
+
+    // Check for PREEMPT_RT kernel (warning, not fatal)
+    if !caps.preempt_rt {
+        warn!(
+            "PREEMPT_RT kernel not detected. Real-time performance may be degraded. \
+             For production deployments, use a kernel with PREEMPT_RT patches."
+        );
+        // Note: We warn but don't fail on this, as vanilla kernels can still work
+        // for soft real-time. Add to issues only for informational purposes.
+    }
+
+    // Check for RT scheduling capability
+    if config.policy != SchedPolicy::Other && !caps.can_use_rt_scheduling() {
+        issues.push(format!(
+            "Cannot use RT scheduling (SCHED_{:?}): RLIMIT_RTPRIO={:?}, is_root={}. \
+             Grant CAP_SYS_NICE capability or set RLIMIT_RTPRIO > 0.",
+            config.policy,
+            caps.rtprio_limit,
+            caps.is_root
+        ));
+    }
+
+    // Check for memory locking capability
+    if config.lock_memory && !caps.can_lock_memory() {
+        issues.push(format!(
+            "Cannot lock memory: RLIMIT_MEMLOCK={:?}, is_root={}. \
+             Grant CAP_IPC_LOCK capability or set RLIMIT_MEMLOCK to unlimited.",
+            caps.memlock_limit, caps.is_root
+        ));
+    }
+
+    if issues.is_empty() {
+        info!("Real-time capabilities validated successfully");
+        Ok(())
+    } else {
+        let message = format!(
+            "Real-time requirements not met (fail_fast=true):\n  - {}",
+            issues.join("\n  - ")
+        );
+        error!("{}", message);
+        Err(PlcError::Config(message))
     }
 }
 

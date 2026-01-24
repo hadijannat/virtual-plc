@@ -177,8 +177,38 @@ impl WasmtimeHost {
         Self::with_config(cycle_time, WasmtimeConfig::default())
     }
 
+    /// Create a Wasmtime host from RuntimeConfig.
+    ///
+    /// Reads Wasm limits from the config's `wasm` section instead of using defaults.
+    pub fn from_runtime_config(config: &plc_common::config::RuntimeConfig) -> Result<Self> {
+        let wasm_config = WasmtimeConfig {
+            opt_level: OptLevel::Speed,
+            max_memory_bytes: config.wasm.max_memory_bytes,
+            max_table_elements: config.wasm.max_table_elements,
+            enable_simd: config.wasm.enable_simd,
+        };
+
+        Self::with_config_and_epochs(
+            config.cycle_time,
+            wasm_config,
+            config.wasm.max_epochs_per_cycle,
+        )
+    }
+
     /// Create a new Wasmtime host with custom configuration.
     pub fn with_config(cycle_time: Duration, wasm_config: WasmtimeConfig) -> Result<Self> {
+        // Calculate epochs per cycle based on cycle time
+        // Rough estimate: 1 epoch ≈ 10µs of execution
+        let max_epochs_per_cycle = (cycle_time.as_micros() as u64 / 10).max(100);
+        Self::with_config_and_epochs(cycle_time, wasm_config, max_epochs_per_cycle)
+    }
+
+    /// Create a new Wasmtime host with explicit epoch configuration.
+    fn with_config_and_epochs(
+        cycle_time: Duration,
+        wasm_config: WasmtimeConfig,
+        max_epochs_per_cycle: u64,
+    ) -> Result<Self> {
         // Configure Wasmtime for real-time PLC execution
         let mut config = Config::new();
 
@@ -190,7 +220,7 @@ impl WasmtimeHost {
 
         // Configure Wasm features for PLC use
         config.wasm_threads(false);
-        // Note: SIMD is left at default to avoid conflicts with relaxed_simd
+        config.wasm_simd(wasm_config.enable_simd);
 
         // Create engine
         let engine = Engine::new(&config).context("Failed to create Wasmtime engine")?;
@@ -202,20 +232,21 @@ impl WasmtimeHost {
 
         let store = Store::new(&engine, host_state);
 
-        // Note: Store limits can be configured via limiter() for production use
-        // For now, we rely on Wasm module validation and epoch interruption for safety
+        // Note: Store limits (max_memory_bytes, max_table_elements) can be enforced
+        // via StoreLimits/limiter() for production use. The values from WasmtimeConfig
+        // are available for future implementation of resource limiting.
 
         // Create linker and register host functions
         let mut linker = Linker::new(&engine);
         register_host_functions(&mut linker).context("Failed to register host functions")?;
 
-        // Calculate epochs per cycle based on cycle time
-        // Rough estimate: 1 epoch ≈ 10µs of execution
-        let max_epochs_per_cycle = (cycle_time.as_micros() as u64 / 10).max(100);
-
         info!(
             cycle_time_ns,
-            max_epochs_per_cycle, "WasmtimeHost created"
+            max_epochs_per_cycle,
+            max_memory_bytes = wasm_config.max_memory_bytes,
+            max_table_elements = wasm_config.max_table_elements,
+            enable_simd = wasm_config.enable_simd,
+            "WasmtimeHost created"
         );
 
         Ok(Self {

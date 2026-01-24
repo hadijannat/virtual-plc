@@ -8,10 +8,10 @@
 //!
 //! Uses `clock_nanosleep` with `TIMER_ABSTIME` for jitter-free timing.
 
-use crate::io_image::IoImage;
+use crate::io_image::{IoImage, ProcessData};
 use crate::wasm_host::LogicEngine;
 use crate::watchdog::Watchdog;
-use plc_common::config::RuntimeConfig;
+use plc_common::config::{FaultPolicyConfig, OverrunPolicy, RuntimeConfig, SafeOutputPolicy};
 use plc_common::error::{PlcError, PlcResult};
 use plc_common::metrics::CycleMetrics;
 use plc_common::state::{RuntimeState, StateMachine};
@@ -51,6 +51,10 @@ pub struct Scheduler<E: LogicEngine> {
     metrics: CycleMetrics,
     /// Watchdog timer.
     watchdog: Option<Watchdog>,
+    /// Fault handling policy.
+    fault_policy: FaultPolicyConfig,
+    /// Last known output values (for HoldLast safe output policy).
+    last_outputs: ProcessData,
 }
 
 impl<E: LogicEngine> Scheduler<E> {
@@ -71,6 +75,8 @@ impl<E: LogicEngine> Scheduler<E> {
             cycle_count: 0,
             metrics,
             watchdog: None,
+            fault_policy: config.fault_policy.clone(),
+            last_outputs: ProcessData::default(),
         }
     }
 
@@ -206,35 +212,62 @@ impl<E: LogicEngine> Scheduler<E> {
             io_outputs.analog_outputs = outputs.analog_outputs;
         });
 
+        // Track last outputs for HoldLast safe output policy
+        self.last_outputs.digital_outputs = outputs.digital_outputs;
+        self.last_outputs.analog_outputs = outputs.analog_outputs;
+
         let execution_time = cycle_start.elapsed();
         self.cycle_count += 1;
 
         // 5. Record metrics
         self.metrics.record(execution_time);
 
-        // 6. Check for overrun
+        // 6. Check for overrun and apply fault policy
         let overrun = execution_time > self.cycle_period;
         if overrun {
             let overrun_amount = execution_time - self.cycle_period;
             if overrun_amount > self.max_overrun {
-                error!(
+                // Critical overrun - apply overrun policy
+                match self.fault_policy.on_overrun {
+                    OverrunPolicy::Fault => {
+                        error!(
+                            execution_us = execution_time.as_micros(),
+                            deadline_us = self.cycle_period.as_micros(),
+                            overrun_us = overrun_amount.as_micros(),
+                            "Critical cycle overrun - entering fault state"
+                        );
+                        self.enter_fault("Critical cycle overrun")?;
+                        return Err(PlcError::CycleOverrun {
+                            expected_ns: self.cycle_period.as_nanos() as u64,
+                            actual_ns: execution_time.as_nanos() as u64,
+                        });
+                    }
+                    OverrunPolicy::Warn => {
+                        warn!(
+                            cycle = self.cycle_count,
+                            execution_us = execution_time.as_micros(),
+                            deadline_us = self.cycle_period.as_micros(),
+                            overrun_us = overrun_amount.as_micros(),
+                            "Critical cycle overrun (policy: warn)"
+                        );
+                    }
+                    OverrunPolicy::Ignore => {
+                        trace!(
+                            cycle = self.cycle_count,
+                            overrun_us = overrun_amount.as_micros(),
+                            "Critical cycle overrun ignored by policy"
+                        );
+                    }
+                }
+            } else {
+                // Minor overrun within tolerance
+                warn!(
+                    cycle = self.cycle_count,
                     execution_us = execution_time.as_micros(),
                     deadline_us = self.cycle_period.as_micros(),
-                    overrun_us = overrun_amount.as_micros(),
-                    "Critical cycle overrun - entering fault state"
+                    "Cycle overrun (within tolerance)"
                 );
-                self.enter_fault("Critical cycle overrun")?;
-                return Err(PlcError::CycleOverrun {
-                    expected_ns: self.cycle_period.as_nanos() as u64,
-                    actual_ns: execution_time.as_nanos() as u64,
-                });
             }
-            warn!(
-                cycle = self.cycle_count,
-                execution_us = execution_time.as_micros(),
-                deadline_us = self.cycle_period.as_micros(),
-                "Cycle overrun (within tolerance)"
-            );
         }
 
         // 7. Wait for next deadline
@@ -316,15 +349,49 @@ impl<E: LogicEngine> Scheduler<E> {
         Ok(())
     }
 
-    /// Set all outputs to safe values (typically 0).
+    /// Set outputs to safe values based on the configured safe output policy.
     ///
     /// Uses the seqlock-protected write_outputs() for thread-safe atomic update.
     fn set_safe_outputs(&mut self) {
-        debug!("Setting outputs to safe state");
-        self.io.write_outputs(|outputs| {
-            outputs.digital_outputs = [0; 1];
-            outputs.analog_outputs = [0; 16];
-        });
+        debug!(policy = ?self.fault_policy.safe_outputs, "Setting outputs to safe state");
+
+        match &self.fault_policy.safe_outputs {
+            SafeOutputPolicy::AllOff => {
+                self.io.write_outputs(|outputs| {
+                    outputs.digital_outputs = [0; 1];
+                    outputs.analog_outputs = [0; 16];
+                });
+            }
+            SafeOutputPolicy::HoldLast => {
+                // Keep current outputs - they're already in place via last_outputs tracking
+                // Just ensure the I/O image has the last known values
+                let last = self.last_outputs;
+                self.io.write_outputs(|outputs| {
+                    outputs.digital_outputs = last.digital_outputs;
+                    outputs.analog_outputs = last.analog_outputs;
+                });
+                debug!("Holding last output values");
+            }
+            SafeOutputPolicy::UserDefined { digital, analog } => {
+                // Apply user-defined safe values
+                let mut safe_digital = [0u32; 1];
+                let mut safe_analog = [0i16; 16];
+
+                // Copy user-defined values (up to array bounds)
+                for (i, &val) in digital.iter().take(safe_digital.len()).enumerate() {
+                    safe_digital[i] = val;
+                }
+                for (i, &val) in analog.iter().take(safe_analog.len()).enumerate() {
+                    safe_analog[i] = val;
+                }
+
+                self.io.write_outputs(|outputs| {
+                    outputs.digital_outputs = safe_digital;
+                    outputs.analog_outputs = safe_analog;
+                });
+                debug!("Applied user-defined safe output values");
+            }
+        }
     }
 
     /// Wait until the specified deadline using high-precision absolute sleep.

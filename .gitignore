@@ -4,7 +4,6 @@ AGENTS.md
 
 # Rust
 /target/
-Cargo.lock
 
 # IDE
 .idea/

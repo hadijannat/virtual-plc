@@ -4,6 +4,15 @@ A production-grade soft PLC runtime in Rust, targeting real-time industrial cont
 
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
 
+## Safety Warning
+
+**IMPORTANT:** This software is provided for educational and development purposes. Industrial control systems require extensive validation, certification, and safety measures beyond what is provided here.
+
+- This software has NOT been certified for safety-critical applications (IEC 61508, ISO 13849)
+- Do NOT use in life-safety, motion control, or critical infrastructure without proper validation
+- Always implement hardware safety interlocks independent of software control
+- Consult qualified automation engineers for production deployments
+
 ## Overview
 
 vPLC implements a **split-plane architecture** that decouples fieldbus I/O from logic execution:

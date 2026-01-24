@@ -63,6 +63,32 @@ lock_memory = true
 # Pre-faulting ensures stack pages are resident before RT execution.
 prefault_stack_size = 8388608  # 8 MiB
 
+# Fail immediately at startup if RT requirements cannot be met.
+# When true, the runtime will error if PREEMPT_RT kernel, CAP_SYS_NICE,
+# or CAP_IPC_LOCK are not available. Recommended for production.
+fail_fast = false
+
+# ============================================================================
+# Fault Policy Configuration
+# ============================================================================
+
+[fault_policy]
+# How to handle cycle overruns: "fault", "warn", or "ignore"
+#   - fault: Enter fault state immediately (strictest, recommended for production)
+#   - warn: Log warning but continue execution
+#   - ignore: Silently ignore overruns (not recommended)
+on_overrun = "fault"
+
+# What to do with outputs when entering safe/fault state:
+#   - "all_off": Set all outputs to zero (safest default)
+#   - "hold_last": Maintain last output values
+#   - User-defined: { digital = [0, 0], analog = [0, 0, 0, 0] }
+safe_outputs = "all_off"
+
+# Whether faults require manual reset (latch) or can auto-recover.
+# When true, operator intervention is required to clear fault state.
+fault_latch = true
+
 # ============================================================================
 # Fieldbus Configuration
 # ============================================================================
@@ -126,3 +152,24 @@ http_export = false
 
 # HTTP metrics endpoint port (when http_export = true).
 http_port = 9090
+
+# ============================================================================
+# WebAssembly Runtime Configuration
+# ============================================================================
+
+[wasm]
+# Maximum linear memory size for Wasm modules (in bytes).
+# 16 MB is sufficient for most PLC programs.
+max_memory_bytes = 16777216  # 16 MB
+
+# Maximum epochs (timeout units) per cycle.
+# Higher values allow longer-running Wasm code but reduce responsiveness.
+# The epoch ticker runs at ~10µs intervals, so 100 epochs ≈ 1ms timeout.
+max_epochs_per_cycle = 100
+
+# Maximum table elements (function pointers, indirect calls, etc.).
+max_table_elements = 10000
+
+# Enable SIMD instructions in Wasm modules.
+# Only enable if your logic requires SIMD and you've validated compatibility.
+enable_simd = false

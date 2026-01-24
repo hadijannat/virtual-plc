@@ -71,3 +71,14 @@ missing_docs = "warn"
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = false

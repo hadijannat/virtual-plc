@@ -159,6 +159,10 @@ pub struct WasmtimeHost {
     initialized: bool,
     /// Local copy of process data for step().
     process_data: ProcessData,
+    /// Whether fuel-based execution budgeting is enabled.
+    use_fuel: bool,
+    /// Fuel units to grant per cycle.
+    fuel_per_cycle: u64,
 }
 
 impl std::fmt::Debug for WasmtimeHost {
@@ -186,6 +190,9 @@ impl WasmtimeHost {
             max_memory_bytes: config.wasm.max_memory_bytes,
             max_table_elements: config.wasm.max_table_elements,
             enable_simd: config.wasm.enable_simd,
+            deterministic: config.wasm.deterministic,
+            use_fuel: config.wasm.use_fuel,
+            fuel_per_cycle: config.wasm.fuel_per_cycle,
         };
 
         Self::with_config_and_epochs(
@@ -221,20 +228,53 @@ impl WasmtimeHost {
         // Configure Wasm features for PLC use
         config.wasm_threads(false);
         config.wasm_simd(wasm_config.enable_simd);
+        // Relaxed SIMD requires SIMD to be enabled
+        config.wasm_relaxed_simd(wasm_config.enable_simd);
+
+        // Apply deterministic mode settings if enabled
+        if wasm_config.deterministic {
+            // Disable features that can introduce non-determinism:
+            // - Reference types (externref/funcref) can have implementation-specific behavior
+            config.wasm_reference_types(false);
+            // - Bulk memory ops may have platform-specific edge cases
+            config.wasm_bulk_memory(false);
+            // - Multi-value returns add complexity
+            config.wasm_multi_value(false);
+            // - Function references can introduce non-determinism
+            config.wasm_function_references(false);
+            // - Tail calls can have stack behavior differences
+            config.wasm_tail_call(false);
+
+            debug!("Deterministic mode enabled: restricted Wasm feature set");
+        }
+
+        // Enable fuel-based execution budgeting if configured
+        if wasm_config.use_fuel {
+            config.consume_fuel(true);
+            debug!(
+                fuel_per_cycle = wasm_config.fuel_per_cycle,
+                "Fuel-based execution budgeting enabled"
+            );
+        }
 
         // Create engine
         let engine = Engine::new(&config).context("Failed to create Wasmtime engine")?;
 
-        // Create store with host state
+        // Create store with host state including resource limits
         // Use saturating conversion to handle extreme values safely
         let cycle_time_ns = u64::try_from(cycle_time.as_nanos()).unwrap_or(u64::MAX);
-        let host_state = HostState::new(cycle_time_ns);
+        let host_state = HostState::with_limits(
+            cycle_time_ns,
+            wasm_config.max_memory_bytes,
+            wasm_config.max_table_elements,
+        );
 
-        let store = Store::new(&engine, host_state);
+        let mut store = Store::new(&engine, host_state);
 
-        // Note: Store limits (max_memory_bytes, max_table_elements) can be enforced
-        // via StoreLimits/limiter() for production use. The values from WasmtimeConfig
-        // are available for future implementation of resource limiting.
+        // Enable the resource limiter. HostState implements ResourceLimiter,
+        // so any attempt by the Wasm module to grow memory beyond max_memory_bytes
+        // or tables beyond max_table_elements will result in a trap.
+        store.limiter(|state| state);
 
         // Create linker and register host functions
         let mut linker = Linker::new(&engine);
@@ -246,6 +286,9 @@ impl WasmtimeHost {
             max_memory_bytes = wasm_config.max_memory_bytes,
             max_table_elements = wasm_config.max_table_elements,
             enable_simd = wasm_config.enable_simd,
+            deterministic = wasm_config.deterministic,
+            use_fuel = wasm_config.use_fuel,
+            fuel_per_cycle = wasm_config.fuel_per_cycle,
             "WasmtimeHost created"
         );
 
@@ -264,6 +307,8 @@ impl WasmtimeHost {
             cycle_time_ns,
             initialized: false,
             process_data: ProcessData::default(),
+            use_fuel: wasm_config.use_fuel,
+            fuel_per_cycle: wasm_config.fuel_per_cycle,
         })
     }
 
@@ -442,11 +487,27 @@ impl LogicEngine for WasmtimeHost {
         // Set epoch deadline for timeout
         self.set_epoch_deadline();
 
+        // Add fuel if fuel-based budgeting is enabled
+        if self.use_fuel {
+            self.store
+                .set_fuel(self.fuel_per_cycle)
+                .map_err(|e| PlcError::Fault(format!("Failed to set fuel: {e}")))?;
+        }
+
         // Call step function
         if let Some(step_fn) = &self.step_fn {
-            step_fn
-                .call(&mut self.store, ())
-                .map_err(|e| PlcError::WasmTrap(format!("step() failed: {e}")))?;
+            step_fn.call(&mut self.store, ()).map_err(|e| {
+                // Check if this was an out-of-fuel error (instruction budget exceeded)
+                let msg = e.to_string();
+                if msg.contains("fuel") || msg.contains("Fuel") {
+                    PlcError::CycleOverrun {
+                        expected_ns: self.cycle_time_ns,
+                        actual_ns: 0, // Unknown - fuel exhausted before completion
+                    }
+                } else {
+                    PlcError::WasmTrap(format!("step() failed: {e}"))
+                }
+            })?;
         }
 
         // Copy outputs from Wasm memory
@@ -546,6 +607,12 @@ pub struct WasmtimeConfig {
     pub max_table_elements: u32,
     /// Enable SIMD instructions.
     pub enable_simd: bool,
+    /// Enable deterministic execution mode.
+    pub deterministic: bool,
+    /// Enable fuel-based execution budgeting.
+    pub use_fuel: bool,
+    /// Fuel units to grant per cycle.
+    pub fuel_per_cycle: u64,
 }
 
 impl Default for WasmtimeConfig {
@@ -555,6 +622,9 @@ impl Default for WasmtimeConfig {
             max_memory_bytes: 16 * 1024 * 1024, // 16 MB
             max_table_elements: 10_000,
             enable_simd: false,
+            deterministic: false,
+            use_fuel: false,
+            fuel_per_cycle: 1_000_000,
         }
     }
 }

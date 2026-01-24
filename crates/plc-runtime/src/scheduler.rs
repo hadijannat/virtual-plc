@@ -18,6 +18,39 @@ use plc_common::state::{RuntimeState, StateMachine};
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, trace, warn};
 
+/// Per-phase timing breakdown for diagnostics.
+///
+/// Provides granular visibility into where time is spent during each PLC cycle,
+/// enabling identification of overrun causes (I/O vs logic execution).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CyclePhaseTimings {
+    /// Time spent reading inputs from I/O image.
+    pub io_read: Duration,
+    /// Time spent executing Wasm logic.
+    pub logic_exec: Duration,
+    /// Time spent writing outputs to I/O image.
+    pub io_write: Duration,
+    /// Total cycle execution time (should equal io_read + logic_exec + io_write + overhead).
+    pub total: Duration,
+}
+
+impl CyclePhaseTimings {
+    /// Returns true if logic execution was the dominant phase.
+    #[must_use]
+    pub fn logic_dominant(&self) -> bool {
+        self.logic_exec >= self.io_read && self.logic_exec >= self.io_write
+    }
+
+    /// Returns the overhead time not accounted for by the three phases.
+    #[must_use]
+    pub fn overhead(&self) -> Duration {
+        self.total
+            .saturating_sub(self.io_read)
+            .saturating_sub(self.logic_exec)
+            .saturating_sub(self.io_write)
+    }
+}
+
 /// Result of a single cycle execution.
 #[derive(Debug, Clone)]
 pub struct CycleResult {
@@ -27,6 +60,8 @@ pub struct CycleResult {
     pub overrun: bool,
     /// Current cycle number.
     pub cycle_count: u64,
+    /// Per-phase timing breakdown for diagnostics.
+    pub phase_timings: CyclePhaseTimings,
 }
 
 /// Deterministic cyclic scheduler.
@@ -190,10 +225,13 @@ impl<E: LogicEngine> Scheduler<E> {
             wd.kick();
         }
 
-        // 2. Read inputs from I/O image
+        // 2. Read inputs from I/O image (timed)
+        let io_read_start = Instant::now();
         let inputs = self.io.read_inputs();
+        let io_read_time = io_read_start.elapsed();
 
-        // 3. Execute logic engine with inputs
+        // 3. Execute logic engine with inputs (timed)
+        let logic_start = Instant::now();
         let outputs = match self.engine.step(&inputs) {
             Ok(outputs) => outputs,
             Err(e) => {
@@ -201,8 +239,10 @@ impl<E: LogicEngine> Scheduler<E> {
                 return Err(e);
             }
         };
+        let logic_exec_time = logic_start.elapsed();
 
-        // 4. Write outputs to I/O image for fieldbus to read
+        // 4. Write outputs to I/O image for fieldbus to read (timed)
+        let io_write_start = Instant::now();
         // Only copy output fields, not the entire ProcessData
         self.io.write_outputs(|io_outputs| {
             io_outputs.digital_outputs = outputs.digital_outputs;
@@ -212,8 +252,15 @@ impl<E: LogicEngine> Scheduler<E> {
         // Track last outputs for HoldLast safe output policy
         self.last_outputs.digital_outputs = outputs.digital_outputs;
         self.last_outputs.analog_outputs = outputs.analog_outputs;
+        let io_write_time = io_write_start.elapsed();
 
         let execution_time = cycle_start.elapsed();
+        let phase_timings = CyclePhaseTimings {
+            io_read: io_read_time,
+            logic_exec: logic_exec_time,
+            io_write: io_write_time,
+            total: execution_time,
+        };
         self.cycle_count += 1;
 
         // 5. Record metrics
@@ -276,6 +323,9 @@ impl<E: LogicEngine> Scheduler<E> {
         trace!(
             cycle = self.cycle_count,
             execution_us = execution_time.as_micros(),
+            io_read_us = phase_timings.io_read.as_micros(),
+            logic_exec_us = phase_timings.logic_exec.as_micros(),
+            io_write_us = phase_timings.io_write.as_micros(),
             "Cycle complete"
         );
 
@@ -283,6 +333,7 @@ impl<E: LogicEngine> Scheduler<E> {
             execution_time,
             overrun,
             cycle_count: self.cycle_count,
+            phase_timings,
         })
     }
 
@@ -645,5 +696,54 @@ mod tests {
         assert_eq!(metrics.total_cycles(), 10);
         assert!(metrics.min().is_some());
         assert!(metrics.max().is_some());
+    }
+
+    #[test]
+    fn test_phase_timings() {
+        let engine = MockEngine::new();
+        let config = RuntimeConfig {
+            cycle_time: Duration::from_millis(10),
+            ..Default::default()
+        };
+        let mut scheduler = Scheduler::new(engine, &config);
+
+        scheduler.initialize().unwrap();
+        scheduler.start().unwrap();
+
+        let result = scheduler.run_cycle().unwrap();
+
+        // All phase timings should be non-negative and non-zero for total
+        assert!(result.phase_timings.total > Duration::ZERO);
+
+        // Total should be >= sum of individual phases
+        let sum = result.phase_timings.io_read
+            + result.phase_timings.logic_exec
+            + result.phase_timings.io_write;
+        assert!(result.phase_timings.total >= sum);
+
+        // Overhead should be small (< 1ms for a simple mock)
+        assert!(result.phase_timings.overhead() < Duration::from_millis(1));
+    }
+
+    #[test]
+    fn test_cycle_phase_timings_methods() {
+        // Test logic_dominant when logic is longest
+        let timings = CyclePhaseTimings {
+            io_read: Duration::from_micros(10),
+            logic_exec: Duration::from_micros(100),
+            io_write: Duration::from_micros(10),
+            total: Duration::from_micros(125),
+        };
+        assert!(timings.logic_dominant());
+        assert_eq!(timings.overhead(), Duration::from_micros(5));
+
+        // Test logic_dominant when IO is longer
+        let timings2 = CyclePhaseTimings {
+            io_read: Duration::from_micros(100),
+            logic_exec: Duration::from_micros(10),
+            io_write: Duration::from_micros(10),
+            total: Duration::from_micros(120),
+        };
+        assert!(!timings2.logic_dominant());
     }
 }

@@ -142,6 +142,8 @@ pub struct FaultPolicyConfig {
     pub safe_outputs: SafeOutputPolicy,
     /// Whether faults require manual reset (latch) or auto-recover.
     pub fault_latch: bool,
+    /// Fieldbus communication failure handling.
+    pub fieldbus_failure: FieldbusFailurePolicy,
 }
 
 /// Scheduler policy for real-time threads.
@@ -300,6 +302,13 @@ pub struct EthercatConfig {
 
     /// Path to ESI (EtherCAT Slave Information) files.
     pub esi_path: Option<PathBuf>,
+
+    /// Number of consecutive WKC (Working Counter) errors before triggering a fault.
+    ///
+    /// The WKC validates that all slaves processed the PDO exchange correctly.
+    /// A mismatch indicates a slave failure, disconnection, or network issue.
+    /// Set to 0 to disable auto-faulting (only log warnings).
+    pub wkc_error_threshold: u32,
 }
 
 impl Default for EthercatConfig {
@@ -309,6 +318,36 @@ impl Default for EthercatConfig {
             dc_enabled: true,
             dc_sync0_cycle: Duration::from_millis(1),
             esi_path: None,
+            wkc_error_threshold: 3, // Fault after 3 consecutive WKC errors
+        }
+    }
+}
+
+/// Fieldbus failure handling policy.
+///
+/// Controls how the runtime responds to fieldbus communication failures.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FieldbusFailurePolicy {
+    /// Maximum consecutive fieldbus exchange failures before entering fault state.
+    ///
+    /// When this threshold is reached, the scheduler enters FAULT state and
+    /// applies the safe output policy. Set to 0 to never auto-fault (not recommended).
+    pub max_consecutive_failures: u32,
+
+    /// Number of successful cycles required after recovery before clearing failure state.
+    ///
+    /// After fieldbus communication recovers, this many successful cycles must complete
+    /// before the consecutive failure counter is fully reset. This provides hysteresis
+    /// to prevent flapping between normal and failure states.
+    pub recovery_grace_cycles: u32,
+}
+
+impl Default for FieldbusFailurePolicy {
+    fn default() -> Self {
+        Self {
+            max_consecutive_failures: 3,
+            recovery_grace_cycles: 1,
         }
     }
 }
@@ -386,6 +425,36 @@ pub struct WasmConfig {
 
     /// Enable SIMD instructions in Wasm modules.
     pub enable_simd: bool,
+
+    /// Enable deterministic execution mode.
+    ///
+    /// When true, applies strict Wasmtime settings to ensure reproducible execution:
+    /// - Disables reference types (externref/funcref can introduce non-determinism)
+    /// - Disables bulk memory operations (can have implementation-specific behavior)
+    /// - Disables multi-value returns (simplifies execution model)
+    /// - Already disabled: threads, SIMD (unless explicitly enabled)
+    ///
+    /// Recommended for safety-critical applications where identical inputs must
+    /// always produce identical outputs across different runs and platforms.
+    pub deterministic: bool,
+
+    /// Enable fuel-based execution budgeting.
+    ///
+    /// When true, Wasm execution is metered at the instruction level using Wasmtime's
+    /// fuel mechanism. This provides tighter WCET guarantees than epoch-based timeouts
+    /// but adds ~5-15% execution overhead.
+    ///
+    /// When disabled (default), only epoch-based timeout is used.
+    pub use_fuel: bool,
+
+    /// Fuel units to grant per PLC cycle.
+    ///
+    /// Each Wasm instruction consumes approximately 1 fuel unit. If fuel runs out
+    /// during execution, the logic engine returns an error (treated as cycle overrun).
+    /// Only used when `use_fuel` is true.
+    ///
+    /// Typical values: 100,000 - 10,000,000 depending on logic complexity.
+    pub fuel_per_cycle: u64,
 }
 
 impl Default for WasmConfig {
@@ -395,6 +464,9 @@ impl Default for WasmConfig {
             max_epochs_per_cycle: 100,
             max_table_elements: 10_000,
             enable_simd: false,
+            deterministic: false,
+            use_fuel: false,
+            fuel_per_cycle: 1_000_000, // 1M instructions default
         }
     }
 }

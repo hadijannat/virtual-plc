@@ -201,6 +201,7 @@ fn run_daemon(
             max_cycles,
             metrics_http_export,
             target_cycle_ns,
+            &config.fault_policy.fieldbus_failure,
         )
     } else {
         info!("No Wasm module configured, using NullEngine");
@@ -216,6 +217,7 @@ fn run_daemon(
             max_cycles,
             metrics_http_export,
             target_cycle_ns,
+            &config.fault_policy.fieldbus_failure,
         )
     }
 }
@@ -259,6 +261,7 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
     max_cycles: u64,
     metrics_http_export: bool,
     target_cycle_ns: u64,
+    failure_policy: &plc_common::config::FieldbusFailurePolicy,
 ) -> Result<()> {
     // Initialize scheduler
     scheduler
@@ -283,7 +286,7 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
     let mut cycles_run = 0u64;
     let mut consecutive_fb_failures = 0u32;
     let mut in_failure_streak = false;
-    const MAX_CONSECUTIVE_FB_FAILURES: u32 = 3;
+    let mut recovery_cycles_remaining = 0u32;
 
     let shutdown_requested = wait_for_shutdown(signal_handler, std::time::Duration::from_millis(0));
     if shutdown_requested {
@@ -335,9 +338,11 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
                 let _ = fieldbus.exchange();
 
                 // Enter fault state after too many consecutive failures
-                if consecutive_fb_failures >= MAX_CONSECUTIVE_FB_FAILURES {
+                let max_failures = failure_policy.max_consecutive_failures;
+                if max_failures > 0 && consecutive_fb_failures >= max_failures {
                     error!(
                         failures = consecutive_fb_failures,
+                        threshold = max_failures,
                         "Maximum consecutive fieldbus failures reached, entering fault state"
                     );
                     // Enter FAULT state (not SAFE_STOP) before exiting
@@ -348,26 +353,39 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
                     break;
                 }
             } else {
-                // Recovery path: reset failure tracking on successful exchange
+                // Recovery path: track successful exchanges after failure
                 if in_failure_streak {
-                    info!(
-                        previous_failures = consecutive_fb_failures,
-                        "Fieldbus communication recovered"
-                    );
-                    // Clear streak FIRST so next iteration uses logic outputs
-                    in_failure_streak = false;
-                    consecutive_fb_failures = 0;
+                    // Use grace cycles to provide hysteresis against flapping
+                    if recovery_cycles_remaining == 0 {
+                        recovery_cycles_remaining = failure_policy.recovery_grace_cycles;
+                    }
 
-                    // Immediately copy fresh logic outputs and exchange again
-                    // to avoid one-cycle delay in output recovery
-                    let outputs = scheduler.io.read_outputs();
-                    let fb_outputs = plc_fieldbus::FieldbusOutputs {
-                        digital: outputs.digital_outputs[0],
-                        analog: outputs.analog_outputs,
-                    };
-                    fieldbus.set_outputs(&fb_outputs);
-                    // Best-effort to get outputs out immediately on recovery
-                    let _ = fieldbus.exchange();
+                    if recovery_cycles_remaining > 0 {
+                        recovery_cycles_remaining -= 1;
+                    }
+
+                    // Only declare recovery after grace cycles complete
+                    if recovery_cycles_remaining == 0 {
+                        info!(
+                            previous_failures = consecutive_fb_failures,
+                            grace_cycles = failure_policy.recovery_grace_cycles,
+                            "Fieldbus communication recovered"
+                        );
+                        // Clear streak FIRST so next iteration uses logic outputs
+                        in_failure_streak = false;
+                        consecutive_fb_failures = 0;
+
+                        // Immediately copy fresh logic outputs and exchange again
+                        // to avoid one-cycle delay in output recovery
+                        let outputs = scheduler.io.read_outputs();
+                        let fb_outputs = plc_fieldbus::FieldbusOutputs {
+                            digital: outputs.digital_outputs[0],
+                            analog: outputs.analog_outputs,
+                        };
+                        fieldbus.set_outputs(&fb_outputs);
+                        // Best-effort to get outputs out immediately on recovery
+                        let _ = fieldbus.exchange();
+                    }
                 }
                 diagnostics.state().set_fieldbus_connected(true);
             }

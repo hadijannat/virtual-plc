@@ -15,3 +15,7 @@ crossbeam-utils.workspace = true
 wasmtime.workspace = true
 wat.workspace = true
 plc-common = { path = "../plc-common" }
+
+[lints.rust]
+# Allow unsafe for real-time glue code (mlockall, sched_setaffinity, etc.)
+unsafe_code = "warn"

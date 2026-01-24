@@ -20,10 +20,11 @@ use crate::wasm_memory::{
     read_ai_from_memory, read_di_from_memory, write_ao_to_memory, write_do_to_memory,
 };
 use tracing::{trace, warn};
-use wasmtime::{Caller, Linker, Memory};
+use wasmtime::{Caller, Linker, Memory, ResourceLimiter, StoreLimits, StoreLimitsBuilder};
 
 /// Host state accessible from Wasm host functions.
-#[derive(Debug)]
+///
+/// Also implements resource limiting via the embedded `StoreLimits`.
 pub struct HostState {
     /// Reference to Wasm linear memory (set after instantiation).
     pub memory: Option<Memory>,
@@ -35,6 +36,20 @@ pub struct HostState {
     pub first_cycle: bool,
     /// Log buffer for messages from Wasm.
     pub log_buffer: Vec<String>,
+    /// Resource limiter for memory/table growth control.
+    limits: StoreLimits,
+}
+
+impl std::fmt::Debug for HostState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostState")
+            .field("memory", &self.memory.is_some())
+            .field("cycle_time_ns", &self.cycle_time_ns)
+            .field("cycle_count", &self.cycle_count)
+            .field("first_cycle", &self.first_cycle)
+            .field("log_buffer_len", &self.log_buffer.len())
+            .finish()
+    }
 }
 
 impl Default for HostState {
@@ -45,6 +60,7 @@ impl Default for HostState {
             cycle_count: 0,
             first_cycle: true,
             log_buffer: Vec::new(),
+            limits: StoreLimitsBuilder::new().build(),
         }
     }
 }
@@ -58,6 +74,27 @@ impl HostState {
         }
     }
 
+    /// Create a new host state with the given cycle time and resource limits.
+    pub fn with_limits(
+        cycle_time_ns: u64,
+        max_memory_bytes: usize,
+        max_table_elements: u32,
+    ) -> Self {
+        let limits = StoreLimitsBuilder::new()
+            .memory_size(max_memory_bytes)
+            .table_elements(max_table_elements)
+            .instances(1) // Only allow a single instance
+            .tables(10) // Reasonable limit for indirect function tables
+            .memories(1) // Wasm linear memory (typically just one)
+            .build();
+
+        Self {
+            cycle_time_ns,
+            limits,
+            ..Default::default()
+        }
+    }
+
     /// Set the memory reference after module instantiation.
     pub fn set_memory(&mut self, memory: Memory) {
         self.memory = Some(memory);
@@ -67,6 +104,26 @@ impl HostState {
     pub fn advance_cycle(&mut self) {
         self.cycle_count += 1;
         self.first_cycle = false;
+    }
+}
+
+impl ResourceLimiter for HostState {
+    fn memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> anyhow::Result<bool> {
+        self.limits.memory_growing(current, desired, maximum)
+    }
+
+    fn table_growing(
+        &mut self,
+        current: u32,
+        desired: u32,
+        maximum: Option<u32>,
+    ) -> anyhow::Result<bool> {
+        self.limits.table_growing(current, desired, maximum)
     }
 }
 

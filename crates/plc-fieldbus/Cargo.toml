@@ -22,3 +22,7 @@ default = ["simulated"]
 simulated = []
 # Enable SOEM FFI bindings (requires libsoem-dev installed)
 soem-ffi = []
+
+[lints.rust]
+# Allow unsafe for hardware access and raw socket operations
+unsafe_code = "warn"

@@ -38,10 +38,12 @@
 | ⚡ **Sub-ms Cycle Times** | Deterministic execution with PREEMPT_RT support |
 | 🧊 **Wasm Sandboxing** | Fault-isolated logic execution via Wasmtime |
 | 🔌 **Industrial Fieldbuses** | EtherCAT with DC sync, Modbus TCP, simulated I/O |
-| 📊 **Built-in Metrics** | Prometheus-compatible performance histograms |
-| 🛡️ **Production Hardened** | Watchdog, safe outputs, configurable fault policies |
+| 📊 **Built-in Metrics** | Per-phase cycle timing, Prometheus-compatible histograms |
+| 🛡️ **Production Hardened** | Watchdog, safe outputs, fault recording, configurable fault policies |
 | 🔄 **Split-Plane Architecture** | Decoupled fieldbus I/O from logic execution |
 | 📚 **Standard Library** | Timers, counters, triggers, flip-flops (TON, CTU, R_TRIG, SR...) |
+| ⚙️ **Resource Limits** | Enforced Wasm memory/table limits, optional fuel-based WCET budgeting |
+| 🔒 **Deterministic Mode** | Optional strict Wasm feature set for reproducible execution |
 
 ---
 
@@ -449,6 +451,7 @@ cargo run -p plc-daemon -- --simulated
 
 ## 📚 Documentation
 
+- [`docs/process-image-abi.md`](docs/process-image-abi.md) - Wasm memory layout contract
 - [`docs/acceptance-criteria.md`](docs/acceptance-criteria.md) - Production acceptance criteria
 - [`docs/adr/001-runtime-arch.md`](docs/adr/001-runtime-arch.md) - Runtime architecture decisions
 - [`scripts/host_tune.md`](scripts/host_tune.md) - Host tuning guide

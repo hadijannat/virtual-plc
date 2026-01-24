@@ -65,7 +65,9 @@ wasmparser = "0.220"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 
 [workspace.lints.rust]
-unsafe_code = "warn"
+# Deny unsafe by default - crates that need it (plc-runtime, plc-fieldbus)
+# must explicitly override with #![allow(unsafe_code)] or [lints] in their Cargo.toml
+unsafe_code = "deny"
 missing_docs = "warn"
 
 [workspace.lints.clippy]

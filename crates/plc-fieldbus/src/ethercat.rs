@@ -17,7 +17,7 @@ use crate::FieldbusDriver;
 use plc_common::config::EthercatConfig;
 use plc_common::error::{PlcError, PlcResult};
 use std::time::Instant;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 /// EtherCAT master state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -236,6 +236,8 @@ pub struct EthercatMaster {
     transport: Box<dyn EthercatTransport>,
     /// Cycle counter.
     cycle_count: u64,
+    /// Consecutive WKC error counter for fault threshold enforcement.
+    consecutive_wkc_errors: u32,
 }
 
 impl std::fmt::Debug for EthercatMaster {
@@ -269,6 +271,7 @@ impl EthercatMaster {
             stats: FrameStats::default(),
             transport,
             cycle_count: 0,
+            consecutive_wkc_errors: 0,
         }
     }
 
@@ -467,6 +470,8 @@ impl EthercatMaster {
     }
 
     /// Perform one PDO exchange cycle.
+    ///
+    /// Returns an error if consecutive WKC mismatches exceed the configured threshold.
     pub fn exchange(&mut self) -> PlcResult<()> {
         if self.state != MasterState::Op && self.state != MasterState::SafeOp {
             return Err(PlcError::FieldbusError(format!(
@@ -487,13 +492,39 @@ impl EthercatMaster {
 
         if wkc != self.process_image.expected_wkc {
             self.stats.record_wkc_error();
+            self.consecutive_wkc_errors += 1;
+
             warn!(
                 expected = self.process_image.expected_wkc,
                 actual = wkc,
                 cycle = self.cycle_count,
+                consecutive_errors = self.consecutive_wkc_errors,
                 "Working counter mismatch"
             );
+
+            // Check if we've exceeded the WKC error threshold
+            let threshold = self.config.wkc_error_threshold;
+            if threshold > 0 && self.consecutive_wkc_errors >= threshold {
+                error!(
+                    threshold,
+                    consecutive_errors = self.consecutive_wkc_errors,
+                    "WKC error threshold exceeded - fieldbus fault"
+                );
+                self.state = MasterState::Fault;
+                return Err(PlcError::FieldbusError(format!(
+                    "WKC error threshold exceeded: {} consecutive errors (threshold: {})",
+                    self.consecutive_wkc_errors, threshold
+                )));
+            }
         } else {
+            // Reset consecutive error count on successful exchange
+            if self.consecutive_wkc_errors > 0 {
+                debug!(
+                    previous_errors = self.consecutive_wkc_errors,
+                    "WKC recovered after consecutive errors"
+                );
+                self.consecutive_wkc_errors = 0;
+            }
             self.stats.record_success(rtt.as_micros() as u32);
         }
 
@@ -881,6 +912,7 @@ mod tests {
             dc_enabled: true,
             dc_sync0_cycle: Duration::from_millis(1),
             esi_path: None,
+            wkc_error_threshold: 3,
         }
     }
 
@@ -988,5 +1020,126 @@ mod tests {
         pi.inputs_mut()[0] = 0xAB;
         pi.inputs_mut()[1] = 0xCD;
         assert_eq!(pi.read_input_u16(0), Some(0xCDAB));
+    }
+
+    /// Transport that returns bad WKC after N cycles
+    struct WkcErrorTransport {
+        inner: SimulatedTransport,
+        error_after_cycles: u64,
+        cycle_count: u64,
+    }
+
+    impl WkcErrorTransport {
+        fn new(config: &EthercatConfig, error_after_cycles: u64) -> Self {
+            Self {
+                inner: SimulatedTransport::with_test_slaves(config),
+                error_after_cycles,
+                cycle_count: 0,
+            }
+        }
+    }
+
+    impl EthercatTransport for WkcErrorTransport {
+        fn scan_slaves(&mut self) -> PlcResult<Vec<SlaveConfig>> {
+            self.inner.scan_slaves()
+        }
+
+        fn set_state(&mut self, state: SlaveState) -> PlcResult<()> {
+            self.inner.set_state(state)
+        }
+
+        fn configure_slave_dc(&mut self, config: &DcSlaveConfig) -> PlcResult<()> {
+            self.inner.configure_slave_dc(config)
+        }
+
+        fn read_dc_time(&mut self) -> PlcResult<u64> {
+            self.inner.read_dc_time()
+        }
+
+        fn exchange(&mut self, outputs: &[u8], inputs: &mut [u8]) -> PlcResult<u16> {
+            self.cycle_count += 1;
+            let wkc = self.inner.exchange(outputs, inputs)?;
+            // Return 0 WKC after the specified number of cycles to simulate error
+            if self.cycle_count > self.error_after_cycles {
+                Ok(0) // Bad WKC
+            } else {
+                Ok(wkc)
+            }
+        }
+
+        fn sdo_read(&mut self, request: &SdoRequest) -> PlcResult<Vec<u8>> {
+            self.inner.sdo_read(request)
+        }
+
+        fn sdo_write(&mut self, request: &SdoRequest) -> PlcResult<()> {
+            self.inner.sdo_write(request)
+        }
+
+        fn close(&mut self) -> PlcResult<()> {
+            self.inner.close()
+        }
+    }
+
+    #[test]
+    fn test_wkc_error_threshold() {
+        let mut config = test_config();
+        config.wkc_error_threshold = 3; // Fault after 3 consecutive WKC errors
+
+        let transport = WkcErrorTransport::new(&config, 2); // Start errors after 2 good cycles
+        let mut master = EthercatMaster::with_transport(config, Box::new(transport));
+
+        master.init().unwrap();
+
+        // First 2 cycles should succeed
+        assert!(master.exchange().is_ok());
+        assert!(master.exchange().is_ok());
+        assert_eq!(master.state(), MasterState::Op);
+
+        // Next 2 cycles have WKC errors but below threshold
+        assert!(master.exchange().is_ok()); // 1st WKC error
+        assert!(master.exchange().is_ok()); // 2nd WKC error
+        assert_eq!(master.state(), MasterState::Op);
+
+        // 3rd WKC error should trigger fault
+        let result = master.exchange();
+        assert!(result.is_err());
+        assert_eq!(master.state(), MasterState::Fault);
+    }
+
+    #[test]
+    fn test_wkc_error_recovery() {
+        let mut config = test_config();
+        config.wkc_error_threshold = 5; // Higher threshold
+
+        // Use normal transport (always returns good WKC)
+        let transport = SimulatedTransport::with_test_slaves(&config);
+        let mut master = EthercatMaster::with_transport(config, Box::new(transport));
+
+        master.init().unwrap();
+
+        // Run several successful exchanges
+        for _ in 0..10 {
+            assert!(master.exchange().is_ok());
+        }
+
+        // Consecutive errors should be 0
+        assert_eq!(master.state(), MasterState::Op);
+    }
+
+    #[test]
+    fn test_wkc_threshold_disabled() {
+        let mut config = test_config();
+        config.wkc_error_threshold = 0; // Disabled - only log warnings
+
+        let transport = WkcErrorTransport::new(&config, 0); // All cycles have WKC errors
+        let mut master = EthercatMaster::with_transport(config, Box::new(transport));
+
+        master.init().unwrap();
+
+        // Even with many WKC errors, should not fault when threshold is 0
+        for _ in 0..10 {
+            assert!(master.exchange().is_ok());
+        }
+        assert_eq!(master.state(), MasterState::Op);
     }
 }

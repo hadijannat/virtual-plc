@@ -1,5 +1,6 @@
 #![doc = "Real-time execution engine for the virtual PLC."]
 
+pub mod fault_recorder;
 pub mod io_image;
 pub mod realtime;
 pub mod scheduler;
@@ -8,6 +9,7 @@ pub mod wasm_imports;
 pub mod wasm_memory;
 pub mod watchdog;
 
+pub use fault_recorder::*;
 pub use io_image::*;
 pub use realtime::*;
 pub use scheduler::*;

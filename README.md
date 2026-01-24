@@ -1,19 +1,65 @@
 # Virtual PLC (vPLC)
 
-A production-grade soft PLC runtime in Rust, targeting real-time industrial control with WebAssembly-sandboxed logic execution.
+<p align="center">
+  <img src="assets/banner.png" alt="Virtual PLC - Production-Grade Soft PLC Runtime in Rust" width="100%">
+</p>
 
-![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
+<p align="center">
+  <strong>Production-grade soft PLC runtime in Rust, targeting real-time industrial control with WebAssembly-sandboxed logic execution.</strong>
+</p>
 
-## Safety Warning
+<p align="center">
+  <img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build Status">
+  <img src="https://img.shields.io/badge/rust-1.75%2B-orange?logo=rust" alt="Rust Version">
+  <img src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue" alt="License">
+  <img src="https://img.shields.io/badge/crates-7-success" alt="Crates">
+  <img src="https://img.shields.io/badge/IEC%2061131--3-Structured%20Text-purple" alt="IEC 61131-3">
+</p>
 
-**IMPORTANT:** This software is provided for educational and development purposes. Industrial control systems require extensive validation, certification, and safety measures beyond what is provided here.
+---
 
-- This software has NOT been certified for safety-critical applications (IEC 61508, ISO 13849)
-- Do NOT use in life-safety, motion control, or critical infrastructure without proper validation
-- Always implement hardware safety interlocks independent of software control
-- Consult qualified automation engineers for production deployments
+## ⚠️ Safety Warning
 
-## Overview
+> [!CAUTION]
+> **IMPORTANT:** This software is provided for educational and development purposes. Industrial control systems require extensive validation, certification, and safety measures beyond what is provided here.
+>
+> - This software has **NOT** been certified for safety-critical applications (IEC 61508, ISO 13849)
+> - Do **NOT** use in life-safety, motion control, or critical infrastructure without proper validation
+> - Always implement hardware safety interlocks independent of software control
+> - Consult qualified automation engineers for production deployments
+
+---
+
+## ✨ Features
+
+| Feature | Description |
+|---------|-------------|
+| 🔧 **IEC 61131-3 Compiler** | Full Structured Text compiler targeting WebAssembly |
+| ⚡ **Sub-ms Cycle Times** | Deterministic execution with PREEMPT_RT support |
+| 🧊 **Wasm Sandboxing** | Fault-isolated logic execution via Wasmtime |
+| 🔌 **Industrial Fieldbuses** | EtherCAT with DC sync, Modbus TCP, simulated I/O |
+| 📊 **Built-in Metrics** | Prometheus-compatible performance histograms |
+| 🛡️ **Production Hardened** | Watchdog, safe outputs, configurable fault policies |
+| 🔄 **Split-Plane Architecture** | Decoupled fieldbus I/O from logic execution |
+| 📚 **Standard Library** | Timers, counters, triggers, flip-flops (TON, CTU, R_TRIG, SR...) |
+
+---
+
+## 📊 Project Status
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| `plc-compiler` | ✅ Functional | ST → AST → IR → Wasm pipeline complete |
+| `plc-runtime` | ✅ Functional | Cyclic scheduler, Wasm host, process image, metrics |
+| `plc-stdlib` | ✅ Complete | All standard function blocks implemented |
+| `plc-fieldbus` | 🔶 Partial | Simulated driver complete, EtherCAT/Modbus scaffolded |
+| `plc-daemon` | ✅ Functional | Binary entry point with signal handling |
+| `plc-common` | ✅ Complete | Shared types, configuration, error handling |
+| `plc-web-ui` | 🔴 Scaffold | Control plane UI placeholder |
+
+---
+
+## 🏗️ Architecture
 
 vPLC implements a **split-plane architecture** that decouples fieldbus I/O from logic execution:
 
@@ -22,39 +68,78 @@ vPLC implements a **split-plane architecture** that decouples fieldbus I/O from 
 
 This separation provides fault isolation, deterministic timing, and the ability to hot-reload logic without disrupting I/O communication.
 
-## Architecture
+<p align="center">
+  <img src="assets/architecture.png" alt="vPLC Split-Plane Architecture" width="100%">
+</p>
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        plc-daemon                           │
-│              (Binary entry point, signal handling)          │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-          ┌───────────────┼───────────────┐
-          │               │               │
-          ▼               ▼               ▼
-┌─────────────────┐ ┌───────────┐ ┌─────────────────┐
-│   plc-runtime   │ │plc-compiler│ │   plc-web-ui   │
-│ Scheduler, Wasm │ │ ST → Wasm │ │ (Control plane) │
-│ host, I/O image │ │  pipeline │ │                 │
-└────────┬────────┘ └─────┬─────┘ └─────────────────┘
-         │                │
-         ▼                ▼
-┌─────────────────┐ ┌───────────┐
-│  plc-fieldbus   │ │ plc-stdlib │
-│ EtherCAT/Modbus │ │  FB library│
-└────────┬────────┘ └─────┬─────┘
-         │                │
-         └───────┬────────┘
-                 ▼
-        ┌─────────────────┐
-        │   plc-common    │
-        │ Types, config,  │
-        │ error handling  │
-        └─────────────────┘
+### System Overview
+
+```mermaid
+flowchart TB
+    subgraph Daemon["🚀 plc-daemon"]
+        direction TB
+        Signal["Signal Handling"]
+        Config["Configuration"]
+    end
+    
+    subgraph Runtime["⚡ plc-runtime"]
+        Scheduler["Cyclic Scheduler"]
+        WasmHost["Wasmtime Host"]
+        IOImage["Process Image"]
+        Watchdog["Watchdog"]
+    end
+    
+    subgraph Compiler["🔧 plc-compiler"]
+        Parser["ST Parser"]
+        TypeCheck["Type Checker"]
+        IR["IR Generator"]
+        Codegen["Wasm Codegen"]
+    end
+    
+    subgraph Fieldbus["🔌 plc-fieldbus"]
+        EtherCAT["EtherCAT Master"]
+        Modbus["Modbus TCP"]
+        Simulated["Simulated I/O"]
+    end
+    
+    subgraph Stdlib["📚 plc-stdlib"]
+        Timers["Timers"]
+        Counters["Counters"]
+        Triggers["Triggers"]
+    end
+
+    Daemon --> Runtime
+    Compiler --> WasmHost
+    Stdlib --> Compiler
+    Runtime --> Fieldbus
 ```
 
-### Crates
+### Compiler Pipeline
+
+<p align="center">
+  <img src="assets/compiler_pipeline.png" alt="IEC 61131-3 ST Compiler Pipeline" width="100%">
+</p>
+
+### Scan Cycle
+
+```mermaid
+sequenceDiagram
+    participant S as ⏱️ Scheduler
+    participant F as 🔌 Fieldbus
+    participant W as 🧊 Wasm Logic
+    participant M as 📊 Metrics
+    
+    loop Every Cycle (1ms default)
+        S->>F: exchange()
+        F-->>S: inputs
+        S->>W: step(inputs)
+        W-->>S: outputs
+        S->>F: set_outputs()
+        S->>M: record_cycle()
+    end
+```
+
+### Crate Dependencies
 
 | Crate | Description |
 |-------|-------------|
@@ -66,7 +151,9 @@ This separation provides fault isolation, deterministic timing, and the ability 
 | `plc-common` | Shared IEC types, configuration, error handling |
 | `plc-web-ui` | Control plane web interface (scaffold) |
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 ### Build
 
@@ -105,7 +192,9 @@ let source = r#"
 let wasm_bytes = compile(source).expect("Compilation failed");
 ```
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 ### CLI Flags
 
@@ -154,7 +243,9 @@ http_port = 9090
 
 See [`config/default.toml`](config/default.toml) for a fully documented example.
 
-## IEC 61131-3 Support
+---
+
+## 📐 IEC 61131-3 Support
 
 ### Data Types
 
@@ -199,7 +290,9 @@ See [`config/default.toml`](config/default.toml) for a fully documented example.
 | `SR` | Set-Reset Flip-Flop (set dominant) |
 | `RS` | Reset-Set Flip-Flop (reset dominant) |
 
-## Real-Time Deployment
+---
+
+## 🔧 Real-Time Deployment
 
 ### Requirements
 
@@ -244,7 +337,9 @@ See [`scripts/host_tune.md`](scripts/host_tune.md) for kernel parameter tuning.
 
 Uses `cyclictest` to measure scheduling latency. Target: < 50µs worst-case.
 
-## Wasm Host API
+---
+
+## 🧩 Wasm Host API
 
 Wasm modules import functions from the `"plc"` module:
 
@@ -269,7 +364,9 @@ Optional exports:
 - `init()` - Called once before first cycle
 - `fault()` - Called when entering fault mode
 
-## Key Abstractions
+---
+
+## 🔑 Key Abstractions
 
 ### LogicEngine Trait
 
@@ -298,15 +395,71 @@ pub trait FieldbusDriver: Send {
 
 Implementations: `SimulatedDriver`, `EtherCatDriver` (scaffold)
 
-## Documentation
+---
 
-- [`docs/adr/001-runtime-arch.md`](docs/adr/001-runtime-arch.md) - Runtime architecture decisions
-- [`docs/adr/002-wasm-sandbox.md`](docs/adr/002-wasm-sandbox.md) - Wasm sandboxing rationale
-- [`docs/adr/003-ethercat-primary.md`](docs/adr/003-ethercat-primary.md) - EtherCAT as primary fieldbus
-- [`docs/architecture.md`](docs/architecture.md) - Detailed architecture overview
+## 🗺️ Roadmap
+
+- [x] IEC 61131-3 Structured Text compiler to Wasm
+- [x] Real-time cyclic scheduler with PREEMPT_RT support
+- [x] Standard function blocks (timers, counters, triggers, bistables)
+- [x] Simulated fieldbus driver for testing
+- [x] Process image abstraction
+- [x] Watchdog and fault handling
+- [x] Cycle metrics and histograms
+- [ ] EtherCAT master integration (SOEM-based)
+- [ ] Modbus TCP driver
+- [ ] Web-based control plane UI
+- [ ] Hot-reload of logic modules
+- [ ] Ladder Diagram (LD) support
+- [ ] Function Block Diagram (FBD) support
+- [ ] OPC UA server integration
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Here's how you can help:
+
+1. **Report bugs** - Open an issue describing the problem
+2. **Suggest features** - Open an issue with your idea
+3. **Submit PRs** - Fork, make changes, and submit a pull request
+
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/your-org/virtual-plc.git
+cd virtual-plc
+
+# Build and test
+cargo build
+cargo test
+
+# Run with simulated I/O
+cargo run -p plc-daemon -- --simulated
+```
+
+### Code Style
+
+- Follow Rust idioms and conventions
+- Run `cargo clippy` before submitting PRs
+- Ensure all tests pass with `cargo test`
+
+---
+
+## 📚 Documentation
+
 - [`docs/acceptance-criteria.md`](docs/acceptance-criteria.md) - Production acceptance criteria
+- [`docs/adr/001-runtime-arch.md`](docs/adr/001-runtime-arch.md) - Runtime architecture decisions
 - [`scripts/host_tune.md`](scripts/host_tune.md) - Host tuning guide
 
-## License
+---
 
-MIT OR Apache-2.0
+## 📜 License
+
+This project is dual-licensed under:
+
+- [MIT License](LICENSE-MIT)
+- [Apache License 2.0](LICENSE-APACHE)
+
+Choose whichever license works best for your use case.

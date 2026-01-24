@@ -52,10 +52,10 @@
 | Component | Status | Description |
 |-----------|--------|-------------|
 | `plc-compiler` | ✅ Functional | ST → AST → IR → Wasm pipeline complete |
-| `plc-runtime` | ✅ Functional | Cyclic scheduler, Wasm host, process image, metrics |
+| `plc-runtime` | ✅ Functional | Cyclic scheduler, Wasm host, process image, metrics, fault recording |
 | `plc-stdlib` | ✅ Complete | All standard function blocks implemented |
 | `plc-fieldbus` | 🔶 Partial | Simulated driver complete, EtherCAT/Modbus scaffolded |
-| `plc-daemon` | ✅ Functional | Binary entry point with signal handling |
+| `plc-daemon` | ✅ Functional | Binary entry point with signal handling and diagnostics |
 | `plc-common` | ✅ Complete | Shared types, configuration, error handling |
 | `plc-web-ui` | 🔴 Scaffold | Control plane UI placeholder |
 

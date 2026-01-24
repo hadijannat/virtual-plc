@@ -464,9 +464,7 @@ impl<E: LogicEngine> Scheduler<E> {
 
     /// Check if the watchdog has triggered.
     pub fn watchdog_triggered(&self) -> bool {
-        self.watchdog
-            .as_ref()
-            .map_or(false, |wd| wd.has_triggered())
+        self.watchdog.as_ref().is_some_and(|wd| wd.has_triggered())
     }
 }
 

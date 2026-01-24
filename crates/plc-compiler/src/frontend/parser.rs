@@ -786,12 +786,12 @@ fn parse_literal(pair: Pair<Rule>) -> Result<Expression> {
         }
         Rule::integer_literal => {
             let s = inner.as_str().replace('_', "");
-            let val = if s.starts_with("16#") {
-                i64::from_str_radix(&s[3..], 16)
-            } else if s.starts_with("8#") {
-                i64::from_str_radix(&s[2..], 8)
-            } else if s.starts_with("2#") {
-                i64::from_str_radix(&s[2..], 2)
+            let val = if let Some(rest) = s.strip_prefix("16#") {
+                i64::from_str_radix(rest, 16)
+            } else if let Some(rest) = s.strip_prefix("8#") {
+                i64::from_str_radix(rest, 8)
+            } else if let Some(rest) = s.strip_prefix("2#") {
+                i64::from_str_radix(rest, 2)
             } else {
                 s.parse()
             }

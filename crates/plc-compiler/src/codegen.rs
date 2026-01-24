@@ -59,7 +59,7 @@ impl WasmEmitter {
         self.import_host_functions();
 
         // Define memory (1 page = 64KB, matches IR memory_size)
-        let pages = ((ir_module.memory_size + 0xFFFF) / 0x10000) as u64;
+        let pages = ir_module.memory_size.div_ceil(0x10000) as u64;
         self.memory.memory(MemoryType {
             minimum: pages.max(1),
             maximum: Some(pages.max(1)),

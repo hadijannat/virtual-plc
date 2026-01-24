@@ -375,15 +375,12 @@ pub struct RtCapabilities {
 impl RtCapabilities {
     /// Check if RT scheduling is likely to succeed.
     pub fn can_use_rt_scheduling(&self) -> bool {
-        self.is_root || self.rtprio_limit.map_or(false, |l| l > 0)
+        self.is_root || self.rtprio_limit.is_some_and(|l| l > 0)
     }
 
     /// Check if memory locking is likely to succeed.
     pub fn can_lock_memory(&self) -> bool {
-        self.is_root
-            || self
-                .memlock_limit
-                .map_or(false, |l| l == libc::RLIM_INFINITY)
+        self.is_root || self.memlock_limit.is_some_and(|l| l == libc::RLIM_INFINITY)
     }
 }
 

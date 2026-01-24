@@ -148,7 +148,7 @@ impl CycleMetrics {
         }
 
         // Validate percentile range
-        if percentile < 0.0 || percentile > 100.0 || percentile.is_nan() {
+        if percentile.is_nan() || !(0.0..=100.0).contains(&percentile) {
             return None;
         }
 
@@ -181,7 +181,7 @@ impl CycleMetrics {
 
         percentiles
             .iter()
-            .filter(|&&p| p >= 0.0 && p <= 100.0 && !p.is_nan())
+            .filter(|&&p| !p.is_nan() && (0.0..=100.0).contains(&p))
             .map(|&p| {
                 let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
                 let idx = idx.min(sorted.len() - 1);

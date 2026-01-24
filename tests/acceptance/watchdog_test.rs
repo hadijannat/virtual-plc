@@ -165,11 +165,11 @@ fn test_watchdog_timeout_detection() {
 
     let watchdog_timeout_us = 5_000; // 5ms watchdog timeout
     let mut watchdog = TestWatchdog::new(watchdog_timeout_us);
-    let mut io = TestIoImage::default();
-
-    // Set some outputs to non-safe values
-    io.digital_outputs = 0xFF;
-    io.analog_outputs = [32768, 16384];
+    let mut io = TestIoImage {
+        digital_outputs: 0xFF,
+        analog_outputs: [32768, 16384],
+        ..Default::default()
+    };
 
     // Simulate normal operation for a few cycles
     for _ in 0..10 {
@@ -275,11 +275,11 @@ fn test_fault_recovery_sequence() {
     println!("Testing fault recovery sequence...");
 
     let mut watchdog = TestWatchdog::new(5_000);
-    let mut io = TestIoImage::default();
-
-    // Normal operation
-    io.digital_outputs = 0xAA;
-    io.analog_outputs = [10000, 20000];
+    let mut io = TestIoImage {
+        digital_outputs: 0xAA,
+        analog_outputs: [10000, 20000],
+        ..Default::default()
+    };
 
     // Inject fault (stop kicking watchdog)
     thread::sleep(Duration::from_millis(10));
@@ -335,9 +335,11 @@ fn test_safe_state_timing() {
     let mut times_us: Vec<u64> = Vec::with_capacity(NUM_TESTS);
 
     for _ in 0..NUM_TESTS {
-        let mut io = TestIoImage::default();
-        io.digital_outputs = 0xFF;
-        io.analog_outputs = [65535, 65535];
+        let mut io = TestIoImage {
+            digital_outputs: 0xFF,
+            analog_outputs: [65535, 65535],
+            ..Default::default()
+        };
 
         let start = Instant::now();
         io.go_safe();
@@ -383,9 +385,11 @@ fn test_multiple_fault_types() {
     ];
 
     for fault_type in &fault_types {
-        let mut io = TestIoImage::default();
-        io.digital_outputs = 0xFF;
-        io.analog_outputs = [32768, 32768];
+        let mut io = TestIoImage {
+            digital_outputs: 0xFF,
+            analog_outputs: [32768, 32768],
+            ..Default::default()
+        };
 
         let start = Instant::now();
 

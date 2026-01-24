@@ -139,7 +139,7 @@ fn simulate_plc_cycle(cycle_count: u64) -> Result<Duration, &'static str> {
     let start = Instant::now();
 
     // Simulate some work
-    let work_us = 500 + (cycle_count % 100) as u64; // Varying workload
+    let work_us = 500u64 + (cycle_count % 100); // Varying workload
     thread::sleep(Duration::from_micros(work_us));
 
     // Occasionally simulate a slow cycle (but not a fault)

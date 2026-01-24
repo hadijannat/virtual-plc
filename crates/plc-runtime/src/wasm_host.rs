@@ -196,8 +196,8 @@ impl WasmtimeHost {
         let engine = Engine::new(&config).context("Failed to create Wasmtime engine")?;
 
         // Create store with host state
-        // Use u64 to prevent overflow for cycle times > 4.29s
-        let cycle_time_ns = cycle_time.as_nanos() as u64;
+        // Use saturating conversion to handle extreme values safely
+        let cycle_time_ns = u64::try_from(cycle_time.as_nanos()).unwrap_or(u64::MAX);
         let host_state = HostState::new(cycle_time_ns);
 
         let store = Store::new(&engine, host_state);

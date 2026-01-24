@@ -564,17 +564,16 @@ impl TypeChecker {
                     .map(|a| self.check_expr(&a.value.node))
                     .collect();
 
-                // Look up function to determine if user-defined or host
-                let is_user_defined = self
+                // Look up function - error if not found (mirrors Expression::Call behavior)
+                let func_sig = self
                     .functions
                     .get(&call.name)
-                    .map(|f| f.is_user_defined)
-                    .unwrap_or(false);
+                    .ok_or_else(|| anyhow!("Unknown function: {}", call.name))?;
 
                 Ok(Some(TypedStatement::Call {
                     name: call.name.clone(),
                     arguments: args?,
-                    is_user_defined,
+                    is_user_defined: func_sig.is_user_defined,
                 }))
             }
             Statement::Empty => Ok(Some(TypedStatement::Empty)),
@@ -1050,5 +1049,26 @@ mod tests {
         let ast = parse(source).unwrap();
         let result = check(&ast);
         assert!(result.is_ok(), "Known host function should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_unknown_function_statement_error() {
+        // Test unknown function called as statement (not in expression context)
+        let source = r#"
+            PROGRAM Test
+            VAR END_VAR
+                unknown_func();
+            END_PROGRAM
+        "#;
+
+        let ast = parse(source).unwrap();
+        let result = check(&ast);
+        assert!(result.is_err(), "Unknown function statement should fail");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Unknown function"),
+            "Error should mention unknown function, got: {}",
+            err_msg
+        );
     }
 }

@@ -121,13 +121,14 @@ pub fn copy_outputs_from_wasm(memory: &[u8], data: &mut ProcessData) {
 /// Write system info to Wasm linear memory.
 ///
 /// Note: cycle_time_ns is truncated to u32 for Wasm ABI compatibility.
-/// Values > u32::MAX (~4.29 seconds) are capped at u32::MAX.
+/// Values > i32::MAX (~2.1 seconds) are capped for consistency with
+/// the get_cycle_time() host function.
 #[inline]
 pub fn write_system_info(memory: &mut [u8], info: &WasmSystemInfo) {
     let offset = WASM_SYSINFO_OFFSET as usize;
     if memory.len() >= offset + 8 {
-        // Truncate cycle_time_ns to u32 for ABI compatibility (capped at u32::MAX)
-        let cycle_time_u32 = info.cycle_time_ns.min(u32::MAX as u64) as u32;
+        // Cap at i32::MAX for consistency with get_cycle_time host function
+        let cycle_time_u32 = info.cycle_time_ns.min(i32::MAX as u64) as u32;
         memory[offset..offset + 4].copy_from_slice(&cycle_time_u32.to_le_bytes());
         memory[offset + 4..offset + 8].copy_from_slice(&info.flags.to_le_bytes());
     }

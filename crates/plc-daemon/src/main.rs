@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use crate::diagnostics::{format_prometheus_metrics, DiagnosticsCollector, DiagnosticsState};
-use crate::signals::SignalHandler;
+use crate::signals::{wait_for_shutdown, SignalHandler};
 
 /// PLC daemon command-line arguments.
 #[derive(Parser, Debug)]
@@ -285,10 +285,17 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
     let mut in_failure_streak = false;
     const MAX_CONSECUTIVE_FB_FAILURES: u32 = 3;
 
-    while scheduler.state() == RuntimeState::Run {
+    let mut shutdown_pending =
+        wait_for_shutdown(signal_handler, std::time::Duration::from_millis(0));
+    if shutdown_pending {
+        info!("Shutdown already requested before entering main loop");
+    }
+
+    while scheduler.state() == RuntimeState::Run && !shutdown_pending {
         // Check for shutdown signal
         if signal_handler.shutdown_requested() {
             info!("Shutdown signal received, stopping scheduler");
+            shutdown_pending = true;
             break;
         }
 
@@ -338,6 +345,8 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
                 if let Err(e) = scheduler.enter_fault("Fieldbus failure limit exceeded") {
                     warn!("Failed to enter fault state: {}", e);
                 }
+                signal_handler.request_shutdown();
+                shutdown_pending = true;
                 break;
             }
         } else {
@@ -391,6 +400,8 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
             }
             Err(e) => {
                 error!("Cycle execution failed: {}", e);
+                signal_handler.request_shutdown();
+                shutdown_pending = true;
                 break;
             }
         }
@@ -399,6 +410,8 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
         cycles_run += 1;
         if max_cycles > 0 && cycles_run >= max_cycles {
             info!(cycles = cycles_run, "Maximum cycle count reached");
+            signal_handler.request_shutdown();
+            shutdown_pending = true;
             break;
         }
 
@@ -434,6 +447,7 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
     info!(
         total_cycles = snapshot.cycle_count,
         overruns = snapshot.overrun_count,
+        signals = signal_handler.state().signal_count(),
         uptime_secs = snapshot.uptime.as_secs(),
         final_state = %snapshot.state,
         "Daemon shutdown complete"

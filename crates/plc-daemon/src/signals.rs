@@ -136,6 +136,7 @@ impl SignalHandler {
         // for more robust signal management. This is a simplified implementation.
 
         static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
+        static INTERRUPT_FLAG: AtomicBool = AtomicBool::new(false);
         static RELOAD_FLAG: AtomicBool = AtomicBool::new(false);
 
         // Define signal handlers before registration
@@ -144,7 +145,7 @@ impl SignalHandler {
         }
 
         extern "C" fn sigint_handler(_: c_int) {
-            SHUTDOWN_FLAG.store(true, Ordering::Relaxed);
+            INTERRUPT_FLAG.store(true, Ordering::Relaxed);
         }
 
         extern "C" fn sighup_handler(_: c_int) {
@@ -181,6 +182,11 @@ impl SignalHandler {
         // Only spawn polling thread AFTER all signal handlers are successfully registered
         std::thread::spawn(move || {
             loop {
+                if INTERRUPT_FLAG.swap(false, Ordering::Relaxed) {
+                    info!("Interrupt signal received");
+                    state.request_shutdown();
+                    state.record_signal(SignalKind::Interrupt);
+                }
                 if SHUTDOWN_FLAG.swap(false, Ordering::Relaxed) {
                     info!("Shutdown signal received");
                     state.request_shutdown();
@@ -216,7 +222,7 @@ impl SignalHandler {
 
     /// Manually request shutdown.
     pub fn request_shutdown(&self) {
-        info!("Manual shutdown requested");
+        info!("Shutdown requested");
         self.state.request_shutdown();
     }
 

@@ -257,6 +257,7 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
 
     let mut cycles_run = 0u64;
     let mut consecutive_fb_failures = 0u32;
+    let mut in_failure_streak = false;
     const MAX_CONSECUTIVE_FB_FAILURES: u32 = 3;
 
     while scheduler.state() == RuntimeState::Run {
@@ -272,7 +273,8 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
         }
 
         // Copy outputs from scheduler to fieldbus before exchange
-        {
+        // Skip if in failure streak - keep safe outputs latched
+        if !in_failure_streak {
             let outputs = scheduler.io.read_outputs();
             let fb_outputs = plc_fieldbus::FieldbusOutputs {
                 digital: outputs.digital_outputs[0],
@@ -284,6 +286,7 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
         // Perform fieldbus exchange
         if let Err(e) = fieldbus.exchange() {
             consecutive_fb_failures += 1;
+            in_failure_streak = true;
             error!(
                 error = %e,
                 consecutive_failures = consecutive_fb_failures,
@@ -291,12 +294,14 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
             );
             diagnostics.state().set_fieldbus_connected(false);
 
-            // Zero outputs for fail-safe behavior
+            // Set safe outputs and attempt to send them
             let safe_outputs = plc_fieldbus::FieldbusOutputs {
                 digital: 0,
                 analog: [0; 16],
             };
             fieldbus.set_outputs(&safe_outputs);
+            // Best-effort attempt to push safe outputs on the wire
+            let _ = fieldbus.exchange();
 
             // Enter fault state after too many consecutive failures
             if consecutive_fb_failures >= MAX_CONSECUTIVE_FB_FAILURES {
@@ -304,15 +309,20 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
                     failures = consecutive_fb_failures,
                     "Maximum consecutive fieldbus failures reached, entering fault state"
                 );
+                // Enter FAULT state (not SAFE_STOP) before exiting
+                if let Err(e) = scheduler.enter_fault("Fieldbus failure limit exceeded") {
+                    warn!("Failed to enter fault state: {}", e);
+                }
                 break;
             }
         } else {
-            // Reset counter on successful exchange
-            if consecutive_fb_failures > 0 {
+            // Recovery path: reset failure tracking on successful exchange
+            if in_failure_streak {
                 info!(
                     previous_failures = consecutive_fb_failures,
                     "Fieldbus recovered after failures"
                 );
+                in_failure_streak = false;
                 consecutive_fb_failures = 0;
             }
             diagnostics.state().set_fieldbus_connected(true);

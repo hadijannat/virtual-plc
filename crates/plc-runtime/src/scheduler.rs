@@ -297,7 +297,10 @@ impl<E: LogicEngine> Scheduler<E> {
     }
 
     /// Enter fault state.
-    fn enter_fault(&mut self, reason: &str) -> PlcResult<()> {
+    ///
+    /// This method is public to allow external components (e.g., the daemon)
+    /// to trigger a fault state transition for external failures like fieldbus errors.
+    pub fn enter_fault(&mut self, reason: &str) -> PlcResult<()> {
         error!(reason, "Entering FAULT state");
 
         self.state.enter_fault();
@@ -360,13 +363,24 @@ impl<E: LogicEngine> Scheduler<E> {
 
         // SAFETY: clock_nanosleep is safe with valid parameters
         // Using TIMER_ABSTIME (1) for absolute timing to prevent jitter accumulation
-        unsafe {
-            libc::clock_nanosleep(
-                libc::CLOCK_MONOTONIC,
-                libc::TIMER_ABSTIME,
-                &deadline_ts,
-                std::ptr::null_mut(),
-            );
+        // Loop to handle EINTR (signal interruption) - retry until deadline passes
+        loop {
+            let ret = unsafe {
+                libc::clock_nanosleep(
+                    libc::CLOCK_MONOTONIC,
+                    libc::TIMER_ABSTIME,
+                    &deadline_ts,
+                    std::ptr::null_mut(),
+                )
+            };
+            // ret == 0 means success; anything other than EINTR is also exit
+            if ret == 0 || ret != libc::EINTR {
+                break;
+            }
+            // On EINTR, check if we've passed the deadline before retrying
+            if Instant::now() >= deadline {
+                break;
+            }
         }
     }
 

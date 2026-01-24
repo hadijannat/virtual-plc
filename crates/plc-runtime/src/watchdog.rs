@@ -124,8 +124,7 @@ impl Watchdog {
                     break;
                 }
 
-                if state.is_timed_out(timeout_ns) && !state.triggered.swap(true, Ordering::AcqRel)
-                {
+                if state.is_timed_out(timeout_ns) && !state.triggered.swap(true, Ordering::AcqRel) {
                     error!("Watchdog timeout! RT loop has not responded.");
                     on_trigger();
                 }

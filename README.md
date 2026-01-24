@@ -1,11 +1,11 @@
 # Virtual PLC (vPLC)
 
 <p align="center">
-  <img src="assets/banner.png" alt="Virtual PLC - Production-Grade Soft PLC Runtime in Rust" width="100%">
+  <img src="assets/banner.png" alt="Virtual PLC - Soft PLC Runtime in Rust" width="100%">
 </p>
 
 <p align="center">
-  <strong>Production-grade soft PLC runtime in Rust, targeting real-time industrial control with WebAssembly-sandboxed logic execution.</strong>
+  <strong>Soft PLC runtime in Rust — real-time industrial control with WebAssembly-sandboxed logic execution.</strong>
 </p>
 
 <p align="center">
@@ -39,7 +39,7 @@
 | 🧊 **Wasm Sandboxing** | Fault-isolated logic execution via Wasmtime |
 | 🔌 **Industrial Fieldbuses** | EtherCAT with DC sync, Modbus TCP, simulated I/O |
 | 📊 **Built-in Metrics** | Per-phase cycle timing, Prometheus-compatible histograms |
-| 🛡️ **Production Hardened** | Watchdog, safe outputs, fault recording, configurable fault policies |
+| 🛡️ **Safety Features** | Watchdog, safe outputs, fault recording, configurable fault policies |
 | 🔄 **Split-Plane Architecture** | Decoupled fieldbus I/O from logic execution |
 | 📚 **Standard Library** | Timers, counters, triggers, flip-flops (TON, CTU, R_TRIG, SR...) |
 | ⚙️ **Resource Limits** | Enforced Wasm memory/table limits, optional fuel-based WCET budgeting |

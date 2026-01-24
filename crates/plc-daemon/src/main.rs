@@ -177,7 +177,7 @@ fn run_daemon(
         let wasm_bytes = std::fs::read(wasm_path)
             .with_context(|| format!("Failed to read Wasm module: {:?}", wasm_path))?;
 
-        let engine = WasmtimeHost::new(config.cycle_time)
+        let engine = WasmtimeHost::from_runtime_config(config)
             .with_context(|| "Failed to create Wasmtime host")?;
 
         let mut scheduler = create_scheduler(engine, config);
@@ -320,10 +320,22 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
             if in_failure_streak {
                 info!(
                     previous_failures = consecutive_fb_failures,
-                    "Fieldbus recovered after failures"
+                    "Fieldbus communication recovered"
                 );
+                // Clear streak FIRST so next iteration uses logic outputs
                 in_failure_streak = false;
                 consecutive_fb_failures = 0;
+
+                // Immediately copy fresh logic outputs and exchange again
+                // to avoid one-cycle delay in output recovery
+                let outputs = scheduler.io.read_outputs();
+                let fb_outputs = plc_fieldbus::FieldbusOutputs {
+                    digital: outputs.digital_outputs[0],
+                    analog: outputs.analog_outputs,
+                };
+                fieldbus.set_outputs(&fb_outputs);
+                // Best-effort to get outputs out immediately on recovery
+                let _ = fieldbus.exchange();
             }
             diagnostics.state().set_fieldbus_connected(true);
         }

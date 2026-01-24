@@ -1,4 +1,5 @@
 #![doc = "Real-time execution engine for the virtual PLC."]
+#![allow(unsafe_code)]
 
 pub mod fault_recorder;
 pub mod io_image;

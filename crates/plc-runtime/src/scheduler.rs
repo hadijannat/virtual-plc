@@ -324,11 +324,13 @@ impl<E: LogicEngine> Scheduler<E> {
         });
     }
 
-    /// Wait until the specified deadline using high-precision sleep.
+    /// Wait until the specified deadline using high-precision absolute sleep.
+    ///
+    /// Uses `clock_nanosleep` with `TIMER_ABSTIME` to avoid jitter accumulation
+    /// that would occur with relative sleep (drift between duration calculation
+    /// and actual sleep call).
     #[cfg(target_os = "linux")]
     fn wait_until(&self, deadline: Instant) {
-        use std::time::SystemTime;
-
         // Convert Instant to timespec for clock_nanosleep
         let now = Instant::now();
         if deadline <= now {
@@ -337,22 +339,32 @@ impl<E: LogicEngine> Scheduler<E> {
 
         let duration = deadline - now;
 
-        // Use clock_nanosleep with CLOCK_MONOTONIC and TIMER_ABSTIME
-        // For simplicity, we'll use a relative sleep here since Instant
-        // doesn't directly map to timespec. Production code would use
-        // clock_gettime + clock_nanosleep for true absolute timing.
+        // Get current absolute time from CLOCK_MONOTONIC
+        let mut current_ts = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
 
-        let ts = libc::timespec {
-            tv_sec: duration.as_secs() as libc::time_t,
-            tv_nsec: duration.subsec_nanos() as libc::c_long,
+        // SAFETY: clock_gettime is safe with valid clock_id and non-null pointer
+        unsafe {
+            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut current_ts);
+        }
+
+        // Calculate absolute deadline by adding remaining duration to current time
+        let deadline_nanos = current_ts.tv_nsec as u64 + duration.subsec_nanos() as u64;
+        let deadline_ts = libc::timespec {
+            tv_sec: current_ts.tv_sec + duration.as_secs() as libc::time_t
+                + (deadline_nanos / 1_000_000_000) as libc::time_t,
+            tv_nsec: (deadline_nanos % 1_000_000_000) as libc::c_long,
         };
 
         // SAFETY: clock_nanosleep is safe with valid parameters
+        // Using TIMER_ABSTIME (1) for absolute timing to prevent jitter accumulation
         unsafe {
             libc::clock_nanosleep(
                 libc::CLOCK_MONOTONIC,
-                0, // Relative sleep (TIMER_ABSTIME would be 1)
-                &ts,
+                libc::TIMER_ABSTIME,
+                &deadline_ts,
                 std::ptr::null_mut(),
             );
         }

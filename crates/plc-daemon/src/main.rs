@@ -103,22 +103,54 @@ fn init_logging(level: &str) {
 }
 
 /// Load configuration from file or use defaults.
+///
+/// Resolution priority (first existing file wins):
+/// 1. Command-line `--config` argument
+/// 2. `PLC_CONFIG_PATH` environment variable
+/// 3. `/etc/plc/config.toml` (system path)
+/// 4. `config/default.toml` (local development)
+/// 5. Built-in defaults
 fn load_config(args: &Args) -> Result<RuntimeConfig> {
+    // 1. Command-line argument (highest priority)
     if let Some(config_path) = &args.config {
-        RuntimeConfig::from_file(config_path)
-            .with_context(|| format!("Failed to load config from {:?}", config_path))
-    } else {
-        // Try default config location
-        let default_path = PathBuf::from("config/default.toml");
-        if default_path.exists() {
-            info!(?default_path, "Using default configuration file");
-            RuntimeConfig::from_file(&default_path)
-                .with_context(|| format!("Failed to load default config from {:?}", default_path))
-        } else {
-            info!("No config file found, using built-in defaults");
-            Ok(RuntimeConfig::default())
-        }
+        info!(?config_path, "Loading config from command-line argument");
+        return RuntimeConfig::from_file(config_path)
+            .with_context(|| format!("Failed to load config from {:?}", config_path));
     }
+
+    // 2. Environment variable
+    if let Ok(env_path) = std::env::var("PLC_CONFIG_PATH") {
+        let config_path = PathBuf::from(&env_path);
+        if config_path.exists() {
+            info!(?config_path, "Loading config from PLC_CONFIG_PATH");
+            return RuntimeConfig::from_file(&config_path)
+                .with_context(|| format!("Failed to load config from PLC_CONFIG_PATH={:?}", env_path));
+        }
+        warn!(
+            path = %env_path,
+            "PLC_CONFIG_PATH set but file does not exist, checking other locations"
+        );
+    }
+
+    // 3. System path
+    let system_path = PathBuf::from("/etc/plc/config.toml");
+    if system_path.exists() {
+        info!(?system_path, "Loading config from system path");
+        return RuntimeConfig::from_file(&system_path)
+            .with_context(|| format!("Failed to load config from {:?}", system_path));
+    }
+
+    // 4. Local development path
+    let local_path = PathBuf::from("config/default.toml");
+    if local_path.exists() {
+        info!(?local_path, "Loading config from local path");
+        return RuntimeConfig::from_file(&local_path)
+            .with_context(|| format!("Failed to load config from {:?}", local_path));
+    }
+
+    // 5. Built-in defaults
+    info!("No config file found, using built-in defaults");
+    Ok(RuntimeConfig::default())
 }
 
 /// Main daemon run loop.
@@ -138,7 +170,8 @@ fn run_daemon(
     let has_wasm = config.wasm_module.is_some();
 
     if has_wasm {
-        let wasm_path = config.wasm_module.as_ref().unwrap();
+        let wasm_path = config.wasm_module.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("wasm_module required but not configured"))?;
         info!(?wasm_path, "Loading Wasm module");
 
         let wasm_bytes = std::fs::read(wasm_path)
@@ -223,6 +256,8 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
     );
 
     let mut cycles_run = 0u64;
+    let mut consecutive_fb_failures = 0u32;
+    const MAX_CONSECUTIVE_FB_FAILURES: u32 = 3;
 
     while scheduler.state() == RuntimeState::Run {
         // Check for shutdown signal
@@ -248,8 +283,39 @@ fn run_scheduler_loop<E: plc_runtime::wasm_host::LogicEngine>(
 
         // Perform fieldbus exchange
         if let Err(e) = fieldbus.exchange() {
-            error!("Fieldbus exchange failed: {}", e);
+            consecutive_fb_failures += 1;
+            error!(
+                error = %e,
+                consecutive_failures = consecutive_fb_failures,
+                "Fieldbus exchange failed"
+            );
             diagnostics.state().set_fieldbus_connected(false);
+
+            // Zero outputs for fail-safe behavior
+            let safe_outputs = plc_fieldbus::FieldbusOutputs {
+                digital: 0,
+                analog: [0; 16],
+            };
+            fieldbus.set_outputs(&safe_outputs);
+
+            // Enter fault state after too many consecutive failures
+            if consecutive_fb_failures >= MAX_CONSECUTIVE_FB_FAILURES {
+                error!(
+                    failures = consecutive_fb_failures,
+                    "Maximum consecutive fieldbus failures reached, entering fault state"
+                );
+                break;
+            }
+        } else {
+            // Reset counter on successful exchange
+            if consecutive_fb_failures > 0 {
+                info!(
+                    previous_failures = consecutive_fb_failures,
+                    "Fieldbus recovered after failures"
+                );
+                consecutive_fb_failures = 0;
+            }
+            diagnostics.state().set_fieldbus_connected(true);
         }
 
         // Copy inputs from fieldbus to scheduler after exchange

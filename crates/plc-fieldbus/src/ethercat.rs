@@ -255,10 +255,12 @@ impl EthercatMaster {
     /// Create an EtherCAT master with a custom transport backend.
     pub fn with_transport(config: EthercatConfig, transport: Box<dyn EthercatTransport>) -> Self {
         let cycle_time = config.dc_sync0_cycle;
+        // Use the interface name if configured, otherwise "unspecified" for simulated mode
+        let interface_name = config.interface.as_deref().unwrap_or("unspecified");
         Self {
             config: config.clone(),
             state: MasterState::Offline,
-            network: NetworkConfig::new(&config.interface),
+            network: NetworkConfig::new(interface_name),
             process_image: ProcessImage::new(0, 0),
             dc: DcController::new(cycle_time),
             stats: FrameStats::default(),
@@ -304,7 +306,8 @@ impl EthercatMaster {
 
     /// Scan for slaves on the network.
     pub fn scan_slaves(&mut self) -> PlcResult<usize> {
-        info!(interface = %self.config.interface, "Scanning for EtherCAT slaves");
+        let interface_display = self.config.interface.as_deref().unwrap_or("unspecified");
+        info!(interface = %interface_display, "Scanning for EtherCAT slaves");
 
         self.state = MasterState::Init;
 
@@ -688,7 +691,7 @@ impl SimulatedTransport {
     /// Create a new simulated transport.
     pub fn new(config: &EthercatConfig) -> Self {
         Self {
-            interface: config.interface.clone(),
+            interface: config.interface.clone().unwrap_or_else(|| "simulated".into()),
             slaves: Vec::new(),
             current_state: SlaveState::Init,
             dc_time: 0,
@@ -868,7 +871,7 @@ mod tests {
 
     fn test_config() -> EthercatConfig {
         EthercatConfig {
-            interface: "sim0".into(),
+            interface: Some("sim0".into()),
             dc_enabled: true,
             dc_sync0_cycle: Duration::from_millis(1),
             esi_path: None,

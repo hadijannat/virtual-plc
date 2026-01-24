@@ -77,8 +77,11 @@ driver = "simulated"
 # EtherCAT configuration (used when driver = "ethercat")
 [fieldbus.ethercat]
 # Network interface for EtherCAT communication.
+# REQUIRED when using EtherCAT - must be explicitly configured.
 # Must be a dedicated interface, not shared with other traffic.
-interface = "eth0"
+# Modern Linux uses predictable names like "enp3s0" instead of "eth0".
+# Example: interface = "enp3s0"
+# interface = "eth0"  # Uncomment and set your interface
 
 # Enable Distributed Clocks (DC) for synchronized slave outputs.
 # Required for motion control and precise timing applications.

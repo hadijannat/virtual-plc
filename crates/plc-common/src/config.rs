@@ -230,8 +230,9 @@ pub enum FieldbusDriver {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EthercatConfig {
-    /// Network interface name (e.g., "eth0").
-    pub interface: String,
+    /// Network interface name (e.g., "enp3s0", "eth0").
+    /// Must be explicitly configured - no default to avoid using wrong interface.
+    pub interface: Option<String>,
 
     /// Enable Distributed Clocks synchronization.
     pub dc_enabled: bool,
@@ -247,7 +248,7 @@ pub struct EthercatConfig {
 impl Default for EthercatConfig {
     fn default() -> Self {
         Self {
-            interface: String::from("eth0"),
+            interface: None, // Must be explicitly configured
             dc_enabled: true,
             dc_sync0_cycle: Duration::from_millis(1),
             esi_path: None,
@@ -425,6 +426,11 @@ mod tests {
         assert!(config.realtime.enabled);
         assert_eq!(config.realtime.priority, 95);
         assert_eq!(config.fieldbus.driver, FieldbusDriver::EtherCAT);
+        // Verify interface is parsed as Some
+        assert_eq!(
+            config.fieldbus.ethercat.as_ref().unwrap().interface,
+            Some("enp3s0".to_string())
+        );
     }
 
     #[test]

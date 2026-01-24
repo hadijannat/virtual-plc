@@ -34,7 +34,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tracing::{debug, info, trace, warn};
-use wasmtime::{Config, Engine, Instance, Linker, Memory, Module, OptLevel, Store, Trap, TypedFunc};
+use wasmtime::{
+    Config, Engine, Instance, Linker, Memory, Module, OptLevel, Store, Trap, TypedFunc,
+};
 
 /// Logic engine trait for swappable Wasm runtimes.
 ///

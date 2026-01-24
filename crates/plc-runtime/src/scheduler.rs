@@ -103,9 +103,8 @@ impl<E: LogicEngine> Scheduler<E> {
     /// Create a new scheduler with the given logic engine and configuration.
     pub fn new(engine: E, config: &RuntimeConfig) -> Self {
         let metrics = CycleMetrics::new(config.metrics.histogram_size, config.cycle_time);
-        let fault_recorder = FaultRecorder::new(
-            config.fault_policy.fault_frame_count.unwrap_or(64),
-        );
+        let fault_recorder =
+            FaultRecorder::new(config.fault_policy.fault_frame_count.unwrap_or(64));
 
         Self {
             io: IoImage::new(),
@@ -299,7 +298,10 @@ impl<E: LogicEngine> Scheduler<E> {
         self.cycle_count += 1;
 
         // 5. Record fault frame for this cycle (for postmortem analysis)
-        if let Some(frame) = self.fault_recorder.record_cycle(self.cycle_count, phase_timings) {
+        if let Some(frame) = self
+            .fault_recorder
+            .record_cycle(self.cycle_count, phase_timings)
+        {
             frame.set_inputs(&inputs);
             frame.set_outputs(&outputs);
         }

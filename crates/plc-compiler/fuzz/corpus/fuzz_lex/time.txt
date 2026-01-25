@@ -1,0 +1,6 @@
+T#1s
+T#1ms
+T#1h2m3s4ms
+TIME#100ms
+t#-50ms
+T#1d2h3m4s5ms

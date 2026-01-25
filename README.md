@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build Status">
-  <img src="https://img.shields.io/badge/rust-1.75%2B-orange?logo=rust" alt="Rust Version">
+  <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust" alt="Rust Version">
   <img src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue" alt="License">
   <img src="https://img.shields.io/badge/crates-7-success" alt="Crates">
   <img src="https://img.shields.io/badge/IEC%2061131--3-Structured%20Text-purple" alt="IEC 61131-3">
@@ -44,6 +44,31 @@
 | 📚 **Standard Library** | Timers, counters, triggers, flip-flops (TON, CTU, R_TRIG, SR...) |
 | ⚙️ **Resource Limits** | Enforced Wasm memory/table limits, optional fuel-based WCET budgeting |
 | 🔒 **Deterministic Mode** | Optional strict Wasm feature set for reproducible execution |
+| 🔄 **Hot-Reload** | Update logic modules via SIGHUP without stopping I/O |
+| 🖥️ **Web Dashboard** | Real-time I/O visualization, metrics, fault history |
+| 📝 **VS Code Extension** | Structured Text syntax highlighting and editing support |
+
+---
+
+## 🏆 Why vPLC?
+
+vPLC's WebAssembly sandbox enables capabilities no other open source PLC offers:
+
+| Feature | vPLC | OpenPLC | IronPLC | RuSTy |
+|---------|:----:|:-------:|:-------:|:-----:|
+| **Wasm Sandboxing** | ✅ | ❌ | ❌ | ❌ |
+| **Hot-Reload** | ✅ | ❌ | ❌ | ❌ |
+| **Memory Safety** | Rust+Wasm | C | Rust | Partial |
+| **Real-Time Support** | PREEMPT_RT | Limited | Unknown | N/A |
+| **ST Compiler** | ✅ Full | ✅ | Limited | ✅ Full |
+| **Web UI** | ✅ | ✅ | ❌ | ❌ |
+| **Fault Isolation** | ✅ Split-plane | ❌ | ❌ | N/A |
+
+**Key differentiators:**
+- **Security isolation** - Logic faults can't crash the I/O plane
+- **Hot-reload** - Update PLC logic without stopping production
+- **Portable logic** - Same Wasm module runs on any platform
+- **Deterministic execution** - Reproducible behavior across deployments
 
 ---
 
@@ -54,10 +79,11 @@
 | `plc-compiler` | ✅ Functional | ST → AST → IR → Wasm pipeline complete |
 | `plc-runtime` | ✅ Functional | Cyclic scheduler, Wasm host, process image, metrics, fault recording |
 | `plc-stdlib` | ✅ Complete | All standard function blocks implemented |
-| `plc-fieldbus` | 🔶 Partial | Simulated driver complete, EtherCAT/Modbus scaffolded |
-| `plc-daemon` | ✅ Functional | Binary entry point with signal handling and diagnostics |
+| `plc-fieldbus` | 🔶 Partial | Simulated ✅, Modbus TCP ✅, EtherCAT scaffolded |
+| `plc-daemon` | ✅ Functional | Binary entry point with signal handling, hot-reload, diagnostics |
 | `plc-common` | ✅ Complete | Shared types, configuration, error handling |
-| `plc-web-ui` | 🔴 Scaffold | Control plane UI placeholder |
+| `plc-web-ui` | ✅ Functional | REST API, WebSocket streaming, embedded dashboard, Prometheus metrics |
+| `vscode-vplc` | ✅ Complete | VS Code extension with ST syntax highlighting |
 
 ---
 
@@ -395,12 +421,13 @@ pub trait FieldbusDriver: Send {
 }
 ```
 
-Implementations: `SimulatedDriver`, `EtherCatDriver` (scaffold)
+Implementations: `SimulatedDriver`, `ModbusTcpDriver`, `EtherCatDriver` (scaffold)
 
 ---
 
 ## 🗺️ Roadmap
 
+### Completed
 - [x] IEC 61131-3 Structured Text compiler to Wasm
 - [x] Real-time cyclic scheduler with PREEMPT_RT support
 - [x] Standard function blocks (timers, counters, triggers, bistables)
@@ -408,13 +435,20 @@ Implementations: `SimulatedDriver`, `EtherCatDriver` (scaffold)
 - [x] Process image abstraction
 - [x] Watchdog and fault handling
 - [x] Cycle metrics and histograms
+- [x] Modbus TCP driver with full protocol support
+- [x] Web-based control plane UI (REST API, WebSocket, dashboard)
+- [x] Hot-reload of logic modules (SIGHUP trigger, state preservation)
+- [x] VS Code extension for Structured Text
+- [x] GitHub Actions CI/CD pipeline
+
+### In Progress
 - [ ] EtherCAT master integration (SOEM-based)
-- [ ] Modbus TCP driver
-- [ ] Web-based control plane UI
-- [ ] Hot-reload of logic modules
+
+### Planned
 - [ ] Ladder Diagram (LD) support
 - [ ] Function Block Diagram (FBD) support
 - [ ] OPC UA server integration
+- [ ] Wasm logic module registry
 
 ---
 
@@ -451,10 +485,14 @@ cargo run -p plc-daemon -- --simulated
 
 ## 📚 Documentation
 
+- [`docs/getting-started.md`](docs/getting-started.md) - Quick start guide
+- [`docs/architecture.md`](docs/architecture.md) - Deep-dive on split-plane design
 - [`docs/process-image-abi.md`](docs/process-image-abi.md) - Wasm memory layout contract
+- [`docs/security/threat-model.md`](docs/security/threat-model.md) - Security threat analysis
 - [`docs/acceptance-criteria.md`](docs/acceptance-criteria.md) - Production acceptance criteria
 - [`docs/adr/001-runtime-arch.md`](docs/adr/001-runtime-arch.md) - Runtime architecture decisions
 - [`scripts/host_tune.md`](scripts/host_tune.md) - Host tuning guide
+- [`CHANGELOG.md`](CHANGELOG.md) - Version history and release notes
 
 ---
 

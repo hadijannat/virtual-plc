@@ -9,6 +9,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 clap.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true
@@ -18,3 +19,7 @@ libc.workspace = true
 plc-common = { path = "../plc-common" }
 plc-runtime = { path = "../plc-runtime" }
 plc-fieldbus = { path = "../plc-fieldbus" }
+plc-compiler = { path = "../plc-compiler" }
+plc-web-ui = { path = "../plc-web-ui" }
+wat = "1.0"
+wasmprinter = "0.2"

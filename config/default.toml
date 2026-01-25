@@ -146,12 +146,16 @@ histogram_size = 10000
 # Percentiles to compute from latency data.
 percentiles = [50.0, 90.0, 99.0, 99.9, 99.99]
 
-# Export metrics via HTTP endpoint.
-# Useful for monitoring with Prometheus or similar tools.
-http_export = false
+# Enable web UI and HTTP metrics endpoint.
+# When enabled, provides:
+#   - Web dashboard at http://localhost:8080/
+#   - REST API at /api/state, /api/metrics, /api/io, /api/faults
+#   - WebSocket streaming at /ws
+#   - Prometheus metrics at /metrics
+http_export = true
 
-# HTTP metrics endpoint port (when http_export = true).
-http_port = 9090
+# HTTP server port for web UI and metrics.
+http_port = 8080
 
 # ============================================================================
 # WebAssembly Runtime Configuration

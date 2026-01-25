@@ -1,0 +1,48 @@
+{
+  "name": "vplc-st",
+  "displayName": "Virtual PLC - Structured Text",
+  "description": "IEC 61131-3 Structured Text syntax highlighting for Virtual PLC",
+  "version": "0.1.0",
+  "publisher": "virtual-plc",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/virtual-plc"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "plc",
+    "iec61131",
+    "structured-text",
+    "industrial-automation",
+    "webassembly"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "structured-text",
+        "aliases": [
+          "Structured Text",
+          "ST",
+          "IEC 61131-3"
+        ],
+        "extensions": [
+          ".st",
+          ".ST"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "structured-text",
+        "scopeName": "source.st",
+        "path": "./syntaxes/st.tmLanguage.json"
+      }
+    ]
+  }
+}

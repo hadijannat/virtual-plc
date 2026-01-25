@@ -3,7 +3,7 @@
 //! This crate provides:
 //! - [`FieldbusDriver`] trait for abstracting fieldbus communication
 //! - [`ethercat`] module with EtherCAT master implementation
-//! - [`modbus`] module with Modbus TCP support (scaffold)
+//! - [`modbus`] module with Modbus TCP client support
 //! - [`slave_config`] module with EtherCAT slave configuration
 //! - [`dc_sync`] module with Distributed Clocks synchronization
 
@@ -14,6 +14,7 @@ pub mod slave_config;
 
 pub use dc_sync::*;
 pub use ethercat::*;
+pub use modbus::{FunctionCode, ModbusMapping, ModbusTcpConfig, ModbusTcpDriver};
 pub use slave_config::*;
 
 use plc_common::PlcResult;

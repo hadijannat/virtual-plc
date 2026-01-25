@@ -9,24 +9,88 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  RUST_BACKTRACE: 1
 
 jobs:
-  check:
+  # Lint and format check (runs once on Linux)
+  lint:
+    name: Lint & Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.76.0
+          toolchain: 1.80.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo build --all-targets --locked
-      - run: cargo test --all-targets
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
 
-  docker:
+  # Build and test on multiple platforms
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.80.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+      - name: Build
+        run: cargo build --all-targets
+      - name: Run tests
+        run: cargo test --all-targets
+
+  # Build release binary (Linux only for now)
+  release-build:
+    name: Release Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t vplc:ci .
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.80.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release
+        run: cargo build --release -p plc-daemon
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plc-daemon-linux-x86_64
+          path: target/release/plc-daemon
+
+  # Verify examples compile
+  examples:
+    name: Compile Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.80.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Build daemon
+        run: cargo build -p plc-daemon
+      - name: Compile examples
+        run: |
+          for f in examples/*.st; do
+            echo "Compiling $f..."
+            cargo run -p plc-daemon -- compile "$f" -o /tmp/test.wasm
+          done
+
+  # Docker build
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t vplc:ci .

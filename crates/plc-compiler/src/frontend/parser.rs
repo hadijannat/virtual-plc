@@ -4,13 +4,26 @@
 
 use super::ast::*;
 use anyhow::{anyhow, Result};
-use pest::iterators::Pair;
+use pest::iterators::{Pair, Pairs};
 use pest::Parser;
 use pest_derive::Parser;
 
 #[derive(Parser)]
 #[grammar = "frontend/st.pest"]
 struct StParser;
+
+/// Helper trait for extracting the next element from a pest iterator with context.
+trait PairsExt<'i> {
+    /// Get the next pair, returning an error with context if missing.
+    fn expect_next(&mut self, context: &str) -> Result<Pair<'i, Rule>>;
+}
+
+impl<'i> PairsExt<'i> for Pairs<'i, Rule> {
+    fn expect_next(&mut self, context: &str) -> Result<Pair<'i, Rule>> {
+        self.next()
+            .ok_or_else(|| anyhow!("Parser error: expected {} but found end of input", context))
+    }
+}
 
 /// Parse Structured Text source code into an AST.
 pub fn parse(source: &str) -> Result<CompilationUnit> {
@@ -44,18 +57,24 @@ fn span_from_pair(pair: &Pair<Rule>) -> Span {
 }
 
 fn parse_pou(pair: Pair<Rule>) -> Result<ProgramUnit> {
-    let inner = pair.into_inner().next().unwrap();
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| anyhow!("Expected program unit content"))?;
     match inner.as_rule() {
         Rule::program => Ok(ProgramUnit::Program(parse_program(inner)?)),
         Rule::function_block => Ok(ProgramUnit::FunctionBlock(parse_function_block(inner)?)),
         Rule::function => Ok(ProgramUnit::Function(parse_function(inner)?)),
-        _ => Err(anyhow!("Unexpected POU type")),
+        _ => Err(anyhow!("Unexpected POU type: {:?}", inner.as_rule())),
     }
 }
 
 fn parse_program(pair: Pair<Rule>) -> Result<Program> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
+    let name = inner
+        .expect_next("program name")?
+        .as_str()
+        .to_string();
 
     let mut variables = Vec::new();
     let mut body = Vec::new();
@@ -82,7 +101,10 @@ fn parse_program(pair: Pair<Rule>) -> Result<Program> {
 
 fn parse_function_block(pair: Pair<Rule>) -> Result<FunctionBlock> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
+    let name = inner
+        .expect_next("function block name")?
+        .as_str()
+        .to_string();
 
     let mut variables = Vec::new();
     let mut body = Vec::new();
@@ -109,8 +131,11 @@ fn parse_function_block(pair: Pair<Rule>) -> Result<FunctionBlock> {
 
 fn parse_function(pair: Pair<Rule>) -> Result<Function> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
-    let return_type = parse_data_type(inner.next().unwrap())?;
+    let name = inner
+        .expect_next("function name")?
+        .as_str()
+        .to_string();
+    let return_type = parse_data_type(inner.expect_next("function return type")?)?;
 
     let mut variables = Vec::new();
     let mut body = Vec::new();
@@ -139,7 +164,7 @@ fn parse_function(pair: Pair<Rule>) -> Result<Function> {
 fn parse_var_block(pair: Pair<Rule>) -> Result<VarBlock> {
     let mut inner = pair.into_inner();
 
-    let kind_str = inner.next().unwrap().as_str().to_uppercase();
+    let kind_str = inner.expect_next("variable block kind")?.as_str().to_uppercase();
     let kind = match kind_str.as_str() {
         "VAR" => VarBlockKind::Var,
         "VAR_INPUT" => VarBlockKind::Input,
@@ -191,7 +216,7 @@ fn parse_var_decl(pair: Pair<Rule>) -> Result<Vec<VarDecl>> {
     let mut inner = pair.into_inner();
 
     // Get identifier list - may contain multiple identifiers
-    let id_list = inner.next().unwrap();
+    let id_list = inner.expect_next("identifier list")?;
     let names: Vec<String> = id_list
         .into_inner()
         .map(|p| p.as_str().to_string())
@@ -201,7 +226,7 @@ fn parse_var_decl(pair: Pair<Rule>) -> Result<Vec<VarDecl>> {
         return Err(anyhow!("Variable declaration has no identifiers"));
     }
 
-    let data_type = parse_data_type(inner.next().unwrap())?;
+    let data_type = parse_data_type(inner.expect_next("variable data type")?)?;
 
     // Parse initial value with proper error handling
     let initial_value = match inner.next() {
@@ -228,7 +253,10 @@ fn parse_var_decl(pair: Pair<Rule>) -> Result<Vec<VarDecl>> {
 }
 
 fn parse_data_type(pair: Pair<Rule>) -> Result<DataType> {
-    let inner = pair.into_inner().next().unwrap();
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| anyhow!("Expected data type content"))?;
     match inner.as_rule() {
         Rule::elementary_type => {
             let type_str = inner.as_str().to_uppercase();
@@ -268,16 +296,27 @@ fn parse_data_type(pair: Pair<Rule>) -> Result<DataType> {
         }
         Rule::array_type => {
             let mut parts = inner.into_inner();
-            let subrange = parts.next().unwrap();
+            let subrange = parts
+                .next()
+                .ok_or_else(|| anyhow!("Expected array subrange"))?;
             let mut subrange_inner = subrange.into_inner();
-            let lower_expr = parse_expression(subrange_inner.next().unwrap())?;
-            let upper_expr = parse_expression(subrange_inner.next().unwrap())?;
+            let lower_pair = subrange_inner
+                .next()
+                .ok_or_else(|| anyhow!("Expected array lower bound"))?;
+            let upper_pair = subrange_inner
+                .next()
+                .ok_or_else(|| anyhow!("Expected array upper bound"))?;
+            let lower_expr = parse_expression(lower_pair)?;
+            let upper_expr = parse_expression(upper_pair)?;
 
             // For now, require constant bounds
             let lower = expr_to_i64(&lower_expr)?;
             let upper = expr_to_i64(&upper_expr)?;
 
-            let element_type = parse_data_type(parts.next().unwrap())?;
+            let element_type_pair = parts
+                .next()
+                .ok_or_else(|| anyhow!("Expected array element type"))?;
+            let element_type = parse_data_type(element_type_pair)?;
 
             Ok(DataType::Array {
                 lower,
@@ -331,10 +370,13 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>> {
         Rule::exit_stmt => Ok(Some(Statement::Exit)),
         Rule::continue_stmt => Ok(Some(Statement::Continue)),
         Rule::return_stmt => {
-            let expr = inner.into_inner().next().map(|p| {
-                let span = span_from_pair(&p);
-                Spanned::new(parse_expression(p).unwrap(), span)
-            });
+            let expr = match inner.into_inner().next() {
+                Some(p) => {
+                    let span = span_from_pair(&p);
+                    Some(Spanned::new(parse_expression(p)?, span))
+                }
+                None => None,
+            };
             Ok(Some(Statement::Return(expr)))
         }
         Rule::call_stmt => Ok(Some(parse_call_stmt(inner)?)),
@@ -345,11 +387,11 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>> {
 
 fn parse_assignment(pair: Pair<Rule>) -> Result<Statement> {
     let mut inner = pair.into_inner();
-    let target_pair = inner.next().unwrap();
+    let target_pair = inner.expect_next("assignment target")?;
     let target_span = span_from_pair(&target_pair);
     let target = Spanned::new(parse_variable(target_pair)?, target_span);
 
-    let value_pair = inner.next().unwrap();
+    let value_pair = inner.expect_next("assignment value")?;
     let value_span = span_from_pair(&value_pair);
     let value = Spanned::new(parse_expression(value_pair)?, value_span);
 
@@ -359,11 +401,11 @@ fn parse_assignment(pair: Pair<Rule>) -> Result<Statement> {
 fn parse_if(pair: Pair<Rule>) -> Result<Statement> {
     let mut inner = pair.into_inner();
 
-    let cond_pair = inner.next().unwrap();
+    let cond_pair = inner.expect_next("if condition")?;
     let cond_span = span_from_pair(&cond_pair);
     let condition = Spanned::new(parse_expression(cond_pair)?, cond_span);
 
-    let then_branch = parse_statement_list(inner.next().unwrap())?;
+    let then_branch = parse_statement_list(inner.expect_next("if then branch")?)?;
 
     let mut elsif_branches = Vec::new();
     let mut else_branch = None;
@@ -372,15 +414,19 @@ fn parse_if(pair: Pair<Rule>) -> Result<Statement> {
         match item.as_rule() {
             Rule::elsif_branch => {
                 let mut parts = item.into_inner();
-                let cond = parts.next().unwrap();
+                let cond = parts.expect_next("elsif condition")?;
                 let cond_span = span_from_pair(&cond);
                 elsif_branches.push(ElsifBranch {
                     condition: Spanned::new(parse_expression(cond)?, cond_span),
-                    statements: parse_statement_list(parts.next().unwrap())?,
+                    statements: parse_statement_list(parts.expect_next("elsif statements")?)?,
                 });
             }
             Rule::else_branch => {
-                else_branch = Some(parse_statement_list(item.into_inner().next().unwrap())?);
+                let stmt_list = item
+                    .into_inner()
+                    .next()
+                    .ok_or_else(|| anyhow!("Expected else statements"))?;
+                else_branch = Some(parse_statement_list(stmt_list)?);
             }
             _ => {}
         }
@@ -397,7 +443,7 @@ fn parse_if(pair: Pair<Rule>) -> Result<Statement> {
 fn parse_case(pair: Pair<Rule>) -> Result<Statement> {
     let mut inner = pair.into_inner();
 
-    let sel_pair = inner.next().unwrap();
+    let sel_pair = inner.expect_next("case selector")?;
     let sel_span = span_from_pair(&sel_pair);
     let selector = Spanned::new(parse_expression(sel_pair)?, sel_span);
 
@@ -408,13 +454,17 @@ fn parse_case(pair: Pair<Rule>) -> Result<Statement> {
         match item.as_rule() {
             Rule::case_branch => {
                 let mut parts = item.into_inner();
-                let values_pair = parts.next().unwrap();
+                let values_pair = parts.expect_next("case values")?;
                 let values = parse_case_values(values_pair)?;
-                let statements = parse_statement_list(parts.next().unwrap())?;
+                let statements = parse_statement_list(parts.expect_next("case statements")?)?;
                 branches.push(CaseBranch { values, statements });
             }
             Rule::else_branch => {
-                else_branch = Some(parse_statement_list(item.into_inner().next().unwrap())?);
+                let stmt_list = item
+                    .into_inner()
+                    .next()
+                    .ok_or_else(|| anyhow!("Expected else statements in case"))?;
+                else_branch = Some(parse_statement_list(stmt_list)?);
             }
             _ => {}
         }
@@ -432,7 +482,8 @@ fn parse_case_values(pair: Pair<Rule>) -> Result<Vec<CaseValue>> {
     for item in pair.into_inner() {
         if item.as_rule() == Rule::case_value {
             let mut parts = item.into_inner();
-            let first = parts.next().unwrap();
+            let first = parts
+                .expect_next("case value expression")?;
             let first_span = span_from_pair(&first);
             let first_expr = Spanned::new(parse_expression(first)?, first_span);
 
@@ -451,13 +502,16 @@ fn parse_case_values(pair: Pair<Rule>) -> Result<Vec<CaseValue>> {
 fn parse_for(pair: Pair<Rule>) -> Result<Statement> {
     let mut inner = pair.into_inner();
 
-    let variable = inner.next().unwrap().as_str().to_string();
+    let variable = inner
+        .expect_next("FOR loop variable")?
+        .as_str()
+        .to_string();
 
-    let from_pair = inner.next().unwrap();
+    let from_pair = inner.expect_next("FOR loop start expression")?;
     let from_span = span_from_pair(&from_pair);
     let from = Spanned::new(parse_expression(from_pair)?, from_span);
 
-    let to_pair = inner.next().unwrap();
+    let to_pair = inner.expect_next("FOR loop end expression")?;
     let to_span = span_from_pair(&to_pair);
     let to = Spanned::new(parse_expression(to_pair)?, to_span);
 
@@ -489,11 +543,12 @@ fn parse_for(pair: Pair<Rule>) -> Result<Statement> {
 fn parse_while(pair: Pair<Rule>) -> Result<Statement> {
     let mut inner = pair.into_inner();
 
-    let cond_pair = inner.next().unwrap();
+    let cond_pair = inner.expect_next("WHILE condition")?;
     let cond_span = span_from_pair(&cond_pair);
     let condition = Spanned::new(parse_expression(cond_pair)?, cond_span);
 
-    let body = parse_statement_list(inner.next().unwrap())?;
+    let body_pair = inner.expect_next("WHILE body")?;
+    let body = parse_statement_list(body_pair)?;
 
     Ok(Statement::While(WhileStatement { condition, body }))
 }
@@ -501,9 +556,10 @@ fn parse_while(pair: Pair<Rule>) -> Result<Statement> {
 fn parse_repeat(pair: Pair<Rule>) -> Result<Statement> {
     let mut inner = pair.into_inner();
 
-    let body = parse_statement_list(inner.next().unwrap())?;
+    let body_pair = inner.expect_next("REPEAT body")?;
+    let body = parse_statement_list(body_pair)?;
 
-    let until_pair = inner.next().unwrap();
+    let until_pair = inner.expect_next("UNTIL condition")?;
     let until_span = span_from_pair(&until_pair);
     let until = Spanned::new(parse_expression(until_pair)?, until_span);
 
@@ -512,7 +568,10 @@ fn parse_repeat(pair: Pair<Rule>) -> Result<Statement> {
 
 fn parse_call_stmt(pair: Pair<Rule>) -> Result<Statement> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
+    let name = inner
+        .expect_next("function/block call name")?
+        .as_str()
+        .to_string();
     let arguments = inner
         .next()
         .map(parse_arguments)
@@ -548,17 +607,25 @@ fn parse_arguments(pair: Pair<Rule>) -> Result<Vec<CallArgument>> {
 fn parse_expression(pair: Pair<Rule>) -> Result<Expression> {
     // expression = { or_expr }
     // Extract the or_expr from expression
-    let or_expr = pair.into_inner().next().unwrap();
+    let or_expr = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| anyhow!("Expected expression content"))?;
     parse_or_expr(or_expr)
 }
 
 fn parse_or_expr(pair: Pair<Rule>) -> Result<Expression> {
     let mut inner = pair.into_inner();
-    let mut left = parse_xor_expr(inner.next().unwrap())?;
+    let first = inner
+        .next()
+        .ok_or_else(|| anyhow!("Expected OR expression operand"))?;
+    let mut left = parse_xor_expr(first)?;
 
     while let Some(op_pair) = inner.next() {
         if op_pair.as_rule() == Rule::or_op {
-            let right_pair = inner.next().unwrap();
+            let right_pair = inner
+                .next()
+                .ok_or_else(|| anyhow!("Expected right operand after OR operator"))?;
             let right = parse_xor_expr(right_pair)?;
             let left_span = Span::default(); // Simplified
             let right_span = Span::default();
@@ -584,11 +651,17 @@ fn parse_or_expr(pair: Pair<Rule>) -> Result<Expression> {
 
 fn parse_xor_expr(pair: Pair<Rule>) -> Result<Expression> {
     let mut inner = pair.into_inner();
-    let mut left = parse_and_expr(inner.next().unwrap())?;
+    let first = inner
+        .next()
+        .ok_or_else(|| anyhow!("Expected XOR expression operand"))?;
+    let mut left = parse_and_expr(first)?;
 
     while let Some(op_pair) = inner.next() {
         if op_pair.as_rule() == Rule::xor_op {
-            let right = parse_and_expr(inner.next().unwrap())?;
+            let right_pair = inner
+                .next()
+                .ok_or_else(|| anyhow!("Expected right operand after XOR operator"))?;
+            let right = parse_and_expr(right_pair)?;
             let left_span = Span::default();
             let right_span = Span::default();
             left = Expression::Binary {
@@ -604,11 +677,17 @@ fn parse_xor_expr(pair: Pair<Rule>) -> Result<Expression> {
 
 fn parse_and_expr(pair: Pair<Rule>) -> Result<Expression> {
     let mut inner = pair.into_inner();
-    let mut left = parse_comparison(inner.next().unwrap())?;
+    let first = inner
+        .next()
+        .ok_or_else(|| anyhow!("Expected AND expression operand"))?;
+    let mut left = parse_comparison(first)?;
 
     while let Some(op_pair) = inner.next() {
         if op_pair.as_rule() == Rule::and_op {
-            let right = parse_comparison(inner.next().unwrap())?;
+            let right_pair = inner
+                .next()
+                .ok_or_else(|| anyhow!("Expected right operand after AND operator"))?;
+            let right = parse_comparison(right_pair)?;
             let left_span = Span::default();
             let right_span = Span::default();
             left = Expression::Binary {
@@ -624,7 +703,10 @@ fn parse_and_expr(pair: Pair<Rule>) -> Result<Expression> {
 
 fn parse_comparison(pair: Pair<Rule>) -> Result<Expression> {
     let mut inner = pair.into_inner();
-    let mut left = parse_add_expr(inner.next().unwrap())?;
+    let first = inner
+        .next()
+        .ok_or_else(|| anyhow!("Expected comparison operand"))?;
+    let mut left = parse_add_expr(first)?;
 
     while let Some(op_pair) = inner.next() {
         if op_pair.as_rule() == Rule::comparison_op {
@@ -637,7 +719,10 @@ fn parse_comparison(pair: Pair<Rule>) -> Result<Expression> {
                 ">=" => BinaryOp::Ge,
                 _ => return Err(anyhow!("Unknown comparison operator")),
             };
-            let right = parse_add_expr(inner.next().unwrap())?;
+            let right_pair = inner
+                .next()
+                .ok_or_else(|| anyhow!("Expected right operand after comparison operator"))?;
+            let right = parse_add_expr(right_pair)?;
             let left_span = Span::default();
             let right_span = Span::default();
             left = Expression::Binary {
@@ -653,7 +738,10 @@ fn parse_comparison(pair: Pair<Rule>) -> Result<Expression> {
 
 fn parse_add_expr(pair: Pair<Rule>) -> Result<Expression> {
     let mut inner = pair.into_inner();
-    let mut left = parse_mul_expr(inner.next().unwrap())?;
+    let first = inner
+        .next()
+        .ok_or_else(|| anyhow!("Expected additive expression operand"))?;
+    let mut left = parse_mul_expr(first)?;
 
     while let Some(op_pair) = inner.next() {
         if op_pair.as_rule() == Rule::add_op {
@@ -662,7 +750,10 @@ fn parse_add_expr(pair: Pair<Rule>) -> Result<Expression> {
                 "-" => BinaryOp::Sub,
                 _ => return Err(anyhow!("Unknown add operator")),
             };
-            let right = parse_mul_expr(inner.next().unwrap())?;
+            let right_pair = inner
+                .next()
+                .ok_or_else(|| anyhow!("Expected right operand after +/- operator"))?;
+            let right = parse_mul_expr(right_pair)?;
             let left_span = Span::default();
             let right_span = Span::default();
             left = Expression::Binary {
@@ -678,7 +769,10 @@ fn parse_add_expr(pair: Pair<Rule>) -> Result<Expression> {
 
 fn parse_mul_expr(pair: Pair<Rule>) -> Result<Expression> {
     let mut inner = pair.into_inner();
-    let mut left = parse_power_expr(inner.next().unwrap())?;
+    let first = inner
+        .next()
+        .ok_or_else(|| anyhow!("Expected multiplicative expression operand"))?;
+    let mut left = parse_power_expr(first)?;
 
     while let Some(op_pair) = inner.next() {
         if op_pair.as_rule() == Rule::mul_op {
@@ -688,7 +782,10 @@ fn parse_mul_expr(pair: Pair<Rule>) -> Result<Expression> {
                 "MOD" => BinaryOp::Mod,
                 _ => return Err(anyhow!("Unknown mul operator")),
             };
-            let right = parse_power_expr(inner.next().unwrap())?;
+            let right_pair = inner
+                .next()
+                .ok_or_else(|| anyhow!("Expected right operand after */MOD operator"))?;
+            let right = parse_power_expr(right_pair)?;
             let left_span = Span::default();
             let right_span = Span::default();
             left = Expression::Binary {
@@ -704,7 +801,10 @@ fn parse_mul_expr(pair: Pair<Rule>) -> Result<Expression> {
 
 fn parse_power_expr(pair: Pair<Rule>) -> Result<Expression> {
     let mut inner = pair.into_inner();
-    let mut left = parse_unary_expr(inner.next().unwrap())?;
+    let first = inner
+        .next()
+        .ok_or_else(|| anyhow!("Expected power expression operand"))?;
+    let mut left = parse_unary_expr(first)?;
 
     for right_pair in inner {
         let right = parse_unary_expr(right_pair)?;
@@ -723,7 +823,9 @@ fn parse_power_expr(pair: Pair<Rule>) -> Result<Expression> {
 fn parse_unary_expr(pair: Pair<Rule>) -> Result<Expression> {
     // unary_expr = { unary_op? ~ primary_expr }
     let mut inner = pair.into_inner();
-    let first = inner.next().unwrap();
+    let first = inner
+        .next()
+        .ok_or_else(|| anyhow!("Expected unary expression content"))?;
 
     if first.as_rule() == Rule::unary_op {
         let op = match first.as_str().to_uppercase().as_str() {
@@ -731,7 +833,9 @@ fn parse_unary_expr(pair: Pair<Rule>) -> Result<Expression> {
             "NOT" => UnaryOp::Not,
             _ => return Err(anyhow!("Unknown unary operator")),
         };
-        let primary = inner.next().unwrap();
+        let primary = inner
+            .next()
+            .ok_or_else(|| anyhow!("Expected operand after unary operator"))?;
         let operand = parse_primary_expr_inner(primary)?;
         let span = Span::default();
         Ok(Expression::Unary {
@@ -746,7 +850,10 @@ fn parse_unary_expr(pair: Pair<Rule>) -> Result<Expression> {
 
 fn parse_primary_expr_inner(pair: Pair<Rule>) -> Result<Expression> {
     // primary_expr = { "(" ~ expression ~ ")" | function_call | literal | variable }
-    let inner = pair.into_inner().next().unwrap();
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| anyhow!("Expected primary expression content"))?;
     match inner.as_rule() {
         Rule::expression => {
             let expr = parse_expression(inner)?;
@@ -767,7 +874,11 @@ fn parse_primary_expr_inner(pair: Pair<Rule>) -> Result<Expression> {
 
 fn parse_function_call(pair: Pair<Rule>) -> Result<Expression> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
+    let name = inner
+        .next()
+        .ok_or_else(|| anyhow!("Expected function name"))?
+        .as_str()
+        .to_string();
     let arguments = inner
         .next()
         .map(parse_arguments)
@@ -778,7 +889,10 @@ fn parse_function_call(pair: Pair<Rule>) -> Result<Expression> {
 }
 
 fn parse_literal(pair: Pair<Rule>) -> Result<Expression> {
-    let inner = pair.into_inner().next().unwrap();
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| anyhow!("Expected literal content"))?;
     match inner.as_rule() {
         Rule::bool_literal => {
             let val = inner.as_str().to_uppercase() == "TRUE";
@@ -822,13 +936,20 @@ fn parse_literal(pair: Pair<Rule>) -> Result<Expression> {
 
 fn parse_variable(pair: Pair<Rule>) -> Result<Expression> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
+    let name = inner
+        .next()
+        .ok_or_else(|| anyhow!("Expected variable name"))?
+        .as_str()
+        .to_string();
     let mut expr = Expression::Variable(name);
 
     for item in inner {
         match item.as_rule() {
             Rule::array_index => {
-                let index_pair = item.into_inner().next().unwrap();
+                let index_pair = item
+                    .into_inner()
+                    .next()
+                    .ok_or_else(|| anyhow!("Expected array index expression"))?;
                 let index_span = span_from_pair(&index_pair);
                 let index = parse_expression(index_pair)?;
                 expr = Expression::ArrayAccess {
@@ -837,7 +958,12 @@ fn parse_variable(pair: Pair<Rule>) -> Result<Expression> {
                 };
             }
             Rule::field_access => {
-                let field = item.into_inner().next().unwrap().as_str().to_string();
+                let field = item
+                    .into_inner()
+                    .next()
+                    .ok_or_else(|| anyhow!("Expected field name"))?
+                    .as_str()
+                    .to_string();
                 expr = Expression::FieldAccess {
                     object: Box::new(Spanned::new(expr, Span::default())),
                     field,

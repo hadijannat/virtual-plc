@@ -63,6 +63,41 @@ pub trait LogicEngine: Send {
     /// Check if the engine is ready to execute.
     fn is_ready(&self) -> bool;
 
+    /// Hot-reload a new Wasm module, preserving state where possible.
+    ///
+    /// This method allows updating the logic program without stopping I/O.
+    /// It should be called at cycle boundaries (after outputs, before next inputs)
+    /// to ensure consistent state.
+    ///
+    /// # State Migration
+    ///
+    /// The implementation may attempt to migrate state from the old module to
+    /// the new one. The `preserve_memory` flag controls this behavior:
+    /// - `true`: Copy linear memory from old to new module (if sizes are compatible)
+    /// - `false`: Start with fresh memory (new module's initialization)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The new module fails to compile
+    /// - The new module is missing required exports (`step`, `memory`)
+    /// - State migration fails (memory size incompatible when `preserve_memory` is true)
+    ///
+    /// On error, the old module remains active.
+    ///
+    /// The default implementation returns `Err(PlcError::Config)` indicating
+    /// hot-reload is not supported.
+    fn reload_module(&mut self, _wasm_bytes: &[u8], _preserve_memory: bool) -> PlcResult<()> {
+        Err(PlcError::Config("Hot-reload not supported by this engine".into()))
+    }
+
+    /// Check if the engine supports hot-reload.
+    ///
+    /// Returns `true` if `reload_module` is implemented and can be called.
+    fn supports_hot_reload(&self) -> bool {
+        false
+    }
+
     /// Start the epoch ticker for timeout enforcement.
     ///
     /// Returns an `EpochTicker` handle that must be kept alive for the ticker
@@ -620,6 +655,112 @@ impl LogicEngine for WasmtimeHost {
             }
         }
     }
+
+    fn reload_module(&mut self, wasm_bytes: &[u8], preserve_memory: bool) -> PlcResult<()> {
+        info!(
+            preserve_memory,
+            bytes_len = wasm_bytes.len(),
+            "Hot-reloading Wasm module"
+        );
+
+        // Compile the new module first (before touching current state)
+        let new_module = Module::new(&self.engine, wasm_bytes)
+            .map_err(|e| PlcError::Config(format!("Failed to compile new module: {e}")))?;
+
+        // Verify required exports exist
+        let has_step = new_module.exports().any(|e| e.name() == "step");
+        let has_memory = new_module.exports().any(|e| e.name() == "memory");
+
+        if !has_step {
+            return Err(PlcError::Config(
+                "New module missing required 'step' export".into(),
+            ));
+        }
+        if !has_memory {
+            return Err(PlcError::Config(
+                "New module missing required 'memory' export".into(),
+            ));
+        }
+
+        // Save old memory contents if preserving state
+        let old_memory_data = if preserve_memory {
+            self.memory.map(|mem| {
+                let data = mem.data(&self.store);
+                data.to_vec()
+            })
+        } else {
+            None
+        };
+
+        // Save cycle count to preserve continuity
+        let saved_cycle_count = self.store.data().cycle_count;
+
+        // Clear old instance state
+        self.instance = None;
+        self.memory = None;
+        self.step_fn = None;
+        self.init_fn = None;
+        self.fault_fn = None;
+
+        // Set the new module
+        self.module = Some(new_module);
+
+        // Instantiate the new module
+        self.instantiate()
+            .map_err(|e| PlcError::Config(format!("Failed to instantiate new module: {e}")))?;
+
+        // Restore memory contents if preserving state
+        if let (Some(old_data), Some(new_memory)) = (old_memory_data, self.memory) {
+            let new_data = new_memory.data_mut(&mut self.store);
+            let copy_len = old_data.len().min(new_data.len());
+
+            if copy_len > 0 {
+                new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
+                debug!(
+                    copied_bytes = copy_len,
+                    old_size = old_data.len(),
+                    new_size = new_data.len(),
+                    "Memory state migrated"
+                );
+            }
+
+            // If new memory is smaller, warn about potential data loss
+            if new_data.len() < old_data.len() {
+                warn!(
+                    old_size = old_data.len(),
+                    new_size = new_data.len(),
+                    "New module has smaller memory - some state may be lost"
+                );
+            }
+        } else {
+            // Call init on new module (either couldn't preserve memory or not requested)
+            let has_init = self.init_fn.is_some();
+            if has_init {
+                self.set_epoch_deadline();
+                self.ensure_fuel()?;
+                if let Some(init_fn) = &self.init_fn {
+                    init_fn
+                        .call(&mut self.store, ())
+                        .map_err(|e| PlcError::WasmTrap(format!("init() failed after reload: {e}")))?;
+                }
+            }
+        }
+
+        // Restore cycle count
+        self.store.data_mut().cycle_count = saved_cycle_count;
+        self.store.data_mut().first_cycle = false;
+
+        info!(
+            cycle_count = saved_cycle_count,
+            "Hot-reload complete"
+        );
+
+        Ok(())
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        true
+    }
 }
 
 /// Configuration options for WasmtimeHost.
@@ -858,5 +999,142 @@ mod tests {
 
         let _ = host.step(&inputs).unwrap();
         assert_eq!(host.store.data().cycle_count, 2);
+    }
+
+    #[test]
+    fn test_supports_hot_reload() {
+        let host = WasmtimeHost::new(Duration::from_millis(1)).unwrap();
+        assert!(host.supports_hot_reload());
+
+        let null_engine = NullEngine::default();
+        assert!(!null_engine.supports_hot_reload());
+    }
+
+    #[test]
+    fn test_hot_reload_basic() {
+        let mut host = WasmtimeHost::new(Duration::from_millis(1)).unwrap();
+        host.load_wat(PASSTHROUGH_WAT).unwrap();
+        host.init().unwrap();
+
+        let inputs = ProcessData::default();
+
+        // Run a few cycles
+        for _ in 0..5 {
+            let _ = host.step(&inputs).unwrap();
+        }
+        assert_eq!(host.store.data().cycle_count, 5);
+
+        // Hot-reload with the same module (without preserving memory)
+        let wasm_bytes = wat::parse_str(PASSTHROUGH_WAT).unwrap();
+        host.reload_module(&wasm_bytes, false).unwrap();
+
+        // Cycle count should be preserved
+        assert_eq!(host.store.data().cycle_count, 5);
+
+        // Module should still work
+        let outputs = host.step(&inputs).unwrap();
+        assert_eq!(host.store.data().cycle_count, 6);
+        assert_eq!(outputs.digital_outputs[0] & 1, 0); // No input set
+    }
+
+    #[test]
+    fn test_hot_reload_with_memory_preservation() {
+        // A module that writes to memory location 0x100
+        const WRITER_WAT: &str = r#"
+            (module
+                (import "plc" "read_di" (func $read_di (param i32) (result i32)))
+                (import "plc" "write_do" (func $write_do (param i32 i32)))
+
+                (memory (export "memory") 1)
+
+                (func (export "init")
+                    ;; Write a marker value to memory offset 0x100
+                    (i32.store (i32.const 0x100) (i32.const 0xDEADBEEF))
+                )
+
+                (func (export "step")
+                    ;; Read marker and output it as digital output if set
+                    (call $write_do
+                        (i32.const 0)
+                        (i32.ne
+                            (i32.load (i32.const 0x100))
+                            (i32.const 0)
+                        )
+                    )
+                )
+            )
+        "#;
+
+        let mut host = WasmtimeHost::new(Duration::from_millis(1)).unwrap();
+        host.load_wat(WRITER_WAT).unwrap();
+        host.init().unwrap();
+
+        // Verify marker is set in memory
+        let memory = host.memory.unwrap();
+        let data = memory.data(&host.store);
+        let marker = u32::from_le_bytes(data[0x100..0x104].try_into().unwrap());
+        assert_eq!(marker, 0xDEADBEEF);
+
+        // Run a step to verify output is set based on marker
+        let inputs = ProcessData::default();
+        let outputs = host.step(&inputs).unwrap();
+        assert_eq!(outputs.digital_outputs[0] & 1, 1); // Marker != 0
+
+        // Hot-reload with memory preservation
+        let wasm_bytes = wat::parse_str(WRITER_WAT).unwrap();
+        host.reload_module(&wasm_bytes, true).unwrap();
+
+        // Verify marker is still in memory after reload
+        let memory = host.memory.unwrap();
+        let data = memory.data(&host.store);
+        let marker = u32::from_le_bytes(data[0x100..0x104].try_into().unwrap());
+        assert_eq!(marker, 0xDEADBEEF);
+
+        // Module should still work with preserved state
+        let outputs = host.step(&inputs).unwrap();
+        assert_eq!(outputs.digital_outputs[0] & 1, 1); // Marker still != 0
+    }
+
+    #[test]
+    fn test_hot_reload_rejects_invalid_module() {
+        let mut host = WasmtimeHost::new(Duration::from_millis(1)).unwrap();
+        host.load_wat(PASSTHROUGH_WAT).unwrap();
+        host.init().unwrap();
+
+        // Try to reload with a module missing 'step'
+        const NO_STEP_WAT: &str = r#"
+            (module
+                (memory (export "memory") 1)
+                (func (export "init"))
+            )
+        "#;
+
+        let wasm_bytes = wat::parse_str(NO_STEP_WAT).unwrap();
+        let result = host.reload_module(&wasm_bytes, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("step"));
+
+        // Original module should still work
+        let inputs = ProcessData::default();
+        let _ = host.step(&inputs).unwrap();
+    }
+
+    #[test]
+    fn test_hot_reload_rejects_missing_memory() {
+        let mut host = WasmtimeHost::new(Duration::from_millis(1)).unwrap();
+        host.load_wat(PASSTHROUGH_WAT).unwrap();
+        host.init().unwrap();
+
+        // Try to reload with a module missing 'memory'
+        const NO_MEMORY_WAT: &str = r#"
+            (module
+                (func (export "step"))
+            )
+        "#;
+
+        let wasm_bytes = wat::parse_str(NO_MEMORY_WAT).unwrap();
+        let result = host.reload_module(&wasm_bytes, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("memory"));
     }
 }

@@ -386,8 +386,7 @@ impl RtCapabilities {
 
         #[cfg(target_family = "unix")]
         {
-            self.memlock_limit
-                .is_some_and(|l| l == libc::RLIM_INFINITY)
+            self.memlock_limit.is_some_and(|l| l == libc::RLIM_INFINITY)
         }
 
         #[cfg(not(target_family = "unix"))]

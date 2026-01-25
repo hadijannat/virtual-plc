@@ -592,8 +592,127 @@ impl ModbusTcpDriver {
         Ok(registers)
     }
 
+    /// Write a single coil (function 0x05).
+    ///
+    /// Writes a single coil to 0xFF00 (ON) or 0x0000 (OFF).
+    /// Response echoes the request exactly.
+    fn write_single_coil(&mut self, address: u16, value: bool) -> PlcResult<()> {
+        // Coil value: 0xFF00 for ON, 0x0000 for OFF
+        let coil_value: u16 = if value { 0xFF00 } else { 0x0000 };
+
+        let pdu = [
+            FunctionCode::WriteSingleCoil as u8,
+            (address >> 8) as u8,
+            (address & 0xFF) as u8,
+            (coil_value >> 8) as u8,
+            (coil_value & 0xFF) as u8,
+        ];
+
+        let response = self.send_request(&pdu)?;
+
+        // Response should echo the request (5 bytes)
+        if response.len() < 5 {
+            return Err(PlcError::FieldbusError("Response too short".into()));
+        }
+
+        // Validate function code matches request
+        let response_function = response[0];
+        if response_function != FunctionCode::WriteSingleCoil as u8 {
+            return Err(PlcError::FieldbusError(format!(
+                "Function code mismatch: expected 0x{:02X}, got 0x{:02X}",
+                FunctionCode::WriteSingleCoil as u8,
+                response_function
+            )));
+        }
+
+        // Validate response echoes request
+        let resp_address = u16::from_be_bytes([response[1], response[2]]);
+        let resp_value = u16::from_be_bytes([response[3], response[4]]);
+
+        if resp_address != address {
+            return Err(PlcError::FieldbusError(format!(
+                "Write single coil address mismatch: expected {}, got {}",
+                address, resp_address
+            )));
+        }
+
+        if resp_value != coil_value {
+            return Err(PlcError::FieldbusError(format!(
+                "Write single coil value mismatch: expected 0x{:04X}, got 0x{:04X}",
+                coil_value, resp_value
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Write a single register (function 0x06).
+    ///
+    /// Writes a single 16-bit register value.
+    /// Response echoes the request exactly.
+    fn write_single_register(&mut self, address: u16, value: u16) -> PlcResult<()> {
+        let pdu = [
+            FunctionCode::WriteSingleRegister as u8,
+            (address >> 8) as u8,
+            (address & 0xFF) as u8,
+            (value >> 8) as u8,
+            (value & 0xFF) as u8,
+        ];
+
+        let response = self.send_request(&pdu)?;
+
+        // Response should echo the request (5 bytes)
+        if response.len() < 5 {
+            return Err(PlcError::FieldbusError("Response too short".into()));
+        }
+
+        // Validate function code matches request
+        let response_function = response[0];
+        if response_function != FunctionCode::WriteSingleRegister as u8 {
+            return Err(PlcError::FieldbusError(format!(
+                "Function code mismatch: expected 0x{:02X}, got 0x{:02X}",
+                FunctionCode::WriteSingleRegister as u8,
+                response_function
+            )));
+        }
+
+        // Validate response echoes request
+        let resp_address = u16::from_be_bytes([response[1], response[2]]);
+        let resp_value = u16::from_be_bytes([response[3], response[4]]);
+
+        if resp_address != address {
+            return Err(PlcError::FieldbusError(format!(
+                "Write single register address mismatch: expected {}, got {}",
+                address, resp_address
+            )));
+        }
+
+        if resp_value != value {
+            return Err(PlcError::FieldbusError(format!(
+                "Write single register value mismatch: expected 0x{:04X}, got 0x{:04X}",
+                value, resp_value
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Write multiple coils (function 0x0F).
+    ///
+    /// When writing a single coil, uses FC 0x05 for better device compatibility.
     fn write_coils(&mut self, address: u16, values: &[bool]) -> PlcResult<()> {
+        // Validate non-empty input (quantity=0 is invalid per Modbus spec)
+        if values.is_empty() {
+            return Err(PlcError::FieldbusError(
+                "Cannot write zero coils".into(),
+            ));
+        }
+
+        // Optimization: use single-write FC for single value
+        if values.len() == 1 {
+            return self.write_single_coil(address, values[0]);
+        }
+
         let quantity = values.len() as u16;
         let byte_count = (values.len() + 7) / 8;
 
@@ -645,7 +764,21 @@ impl ModbusTcpDriver {
     }
 
     /// Write multiple registers (function 0x10).
+    ///
+    /// When writing a single register, uses FC 0x06 for better device compatibility.
     fn write_registers(&mut self, address: u16, values: &[u16]) -> PlcResult<()> {
+        // Validate non-empty input (quantity=0 is invalid per Modbus spec)
+        if values.is_empty() {
+            return Err(PlcError::FieldbusError(
+                "Cannot write zero registers".into(),
+            ));
+        }
+
+        // Optimization: use single-write FC for single value
+        if values.len() == 1 {
+            return self.write_single_register(address, values[0]);
+        }
+
         let quantity = values.len() as u16;
         let byte_count = values.len() * 2;
 
@@ -1041,5 +1174,131 @@ mod tests {
         assert!(result.is_err());
         // Should not have incremented attempts again
         assert_eq!(driver.reconnect_attempts, 1);
+    }
+
+    #[test]
+    fn test_write_single_coil_pdu_format() {
+        // Test PDU construction for write single coil (FC 0x05)
+        // PDU format: [0x05, addr_hi, addr_lo, value_hi, value_lo]
+        // Value: 0xFF00 for ON, 0x0000 for OFF
+
+        // Test ON value encoding
+        let coil_on: u16 = 0xFF00;
+        let address: u16 = 0x1234;
+        let pdu_on = [
+            FunctionCode::WriteSingleCoil as u8,
+            (address >> 8) as u8,
+            (address & 0xFF) as u8,
+            (coil_on >> 8) as u8,
+            (coil_on & 0xFF) as u8,
+        ];
+        assert_eq!(pdu_on, [0x05, 0x12, 0x34, 0xFF, 0x00]);
+
+        // Test OFF value encoding
+        let coil_off: u16 = 0x0000;
+        let pdu_off = [
+            FunctionCode::WriteSingleCoil as u8,
+            (address >> 8) as u8,
+            (address & 0xFF) as u8,
+            (coil_off >> 8) as u8,
+            (coil_off & 0xFF) as u8,
+        ];
+        assert_eq!(pdu_off, [0x05, 0x12, 0x34, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_write_single_register_pdu_format() {
+        // Test PDU construction for write single register (FC 0x06)
+        // PDU format: [0x06, addr_hi, addr_lo, value_hi, value_lo]
+
+        let address: u16 = 0x0100;
+        let value: u16 = 0xABCD;
+        let pdu = [
+            FunctionCode::WriteSingleRegister as u8,
+            (address >> 8) as u8,
+            (address & 0xFF) as u8,
+            (value >> 8) as u8,
+            (value & 0xFF) as u8,
+        ];
+        assert_eq!(pdu, [0x06, 0x01, 0x00, 0xAB, 0xCD]);
+    }
+
+    #[test]
+    fn test_write_single_coil_value_encoding() {
+        // Verify the coil value encoding logic
+        // ON = 0xFF00, OFF = 0x0000
+
+        let value_on = true;
+        let coil_on: u16 = if value_on { 0xFF00 } else { 0x0000 };
+        assert_eq!(coil_on, 0xFF00);
+
+        let value_off = false;
+        let coil_off: u16 = if value_off { 0xFF00 } else { 0x0000 };
+        assert_eq!(coil_off, 0x0000);
+    }
+
+    #[test]
+    fn test_write_single_coil_response_parsing() {
+        // Test response validation logic for write single coil
+        // Response echoes the request: [0x05, addr_hi, addr_lo, value_hi, value_lo]
+
+        let address: u16 = 0x00AC;
+        let coil_value: u16 = 0xFF00;
+
+        // Valid response
+        let response = [0x05, 0x00, 0xAC, 0xFF, 0x00];
+        assert_eq!(response[0], FunctionCode::WriteSingleCoil as u8);
+        let resp_address = u16::from_be_bytes([response[1], response[2]]);
+        let resp_value = u16::from_be_bytes([response[3], response[4]]);
+        assert_eq!(resp_address, address);
+        assert_eq!(resp_value, coil_value);
+    }
+
+    #[test]
+    fn test_write_single_register_response_parsing() {
+        // Test response validation logic for write single register
+        // Response echoes the request: [0x06, addr_hi, addr_lo, value_hi, value_lo]
+
+        let address: u16 = 0x0001;
+        let value: u16 = 0x0003;
+
+        // Valid response
+        let response = [0x06, 0x00, 0x01, 0x00, 0x03];
+        assert_eq!(response[0], FunctionCode::WriteSingleRegister as u8);
+        let resp_address = u16::from_be_bytes([response[1], response[2]]);
+        let resp_value = u16::from_be_bytes([response[3], response[4]]);
+        assert_eq!(resp_address, address);
+        assert_eq!(resp_value, value);
+    }
+
+    #[test]
+    fn test_write_coils_single_value_uses_single_write() {
+        // When writing a single coil value, write_coils should internally
+        // use write_single_coil (FC 0x05) instead of write_multiple_coils (FC 0x0F).
+        // We can't fully test this without a server, but we can verify the
+        // function code enum values are correctly defined.
+
+        assert_eq!(FunctionCode::WriteSingleCoil as u8, 0x05);
+        assert_eq!(FunctionCode::WriteMultipleCoils as u8, 0x0F);
+    }
+
+    #[test]
+    fn test_write_registers_single_value_uses_single_write() {
+        // When writing a single register value, write_registers should internally
+        // use write_single_register (FC 0x06) instead of write_multiple_registers (FC 0x10).
+        // We can't fully test this without a server, but we can verify the
+        // function code enum values are correctly defined.
+
+        assert_eq!(FunctionCode::WriteSingleRegister as u8, 0x06);
+        assert_eq!(FunctionCode::WriteMultipleRegisters as u8, 0x10);
+    }
+
+    #[test]
+    fn test_function_codes_defined() {
+        // Verify all single and multiple write function codes are defined
+        assert_eq!(FunctionCode::WriteSingleCoil as u8, 0x05);
+        assert_eq!(FunctionCode::WriteSingleRegister as u8, 0x06);
+        assert_eq!(FunctionCode::WriteMultipleCoils as u8, 0x0F);
+        assert_eq!(FunctionCode::WriteMultipleRegisters as u8, 0x10);
     }
 }

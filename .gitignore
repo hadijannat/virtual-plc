@@ -4,6 +4,7 @@ AGENTS.md
 
 # Rust
 /target/
+crates/plc-compiler/fuzz/target/
 
 # IDE
 .idea/

@@ -1,0 +1,13 @@
+[advisories]
+# RustSec IDs to ignore (temporary).
+# These currently flow in via optional EtherCAT (SOEM) bindings and Wasmtime.
+ignore = [
+    # shlex vulnerability via bindgen 0.53.x used by SOEM-sys (optional EtherCAT feature).
+    "RUSTSEC-2024-0006",
+    # atty advisories via old clap/env_logger in bindgen's dependency tree (SOEM-sys).
+    "RUSTSEC-2021-0139",
+    "RUSTSEC-2024-0375",
+    "RUSTSEC-2021-0145",
+    # paste unmaintained via wasmtime (no safe alternative currently).
+    "RUSTSEC-2024-0436",
+]

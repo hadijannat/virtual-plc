@@ -1,0 +1,45 @@
+# EtherCAT Fieldbus Configuration
+#
+# This configuration enables EtherCAT communication with industrial
+# servo drives, I/O modules, and other EtherCAT slaves.
+#
+# Prerequisites:
+#   - Dedicated network interface (not shared with other traffic)
+#   - SOEM library installed
+#   - Root privileges or CAP_NET_RAW capability
+#   - PREEMPT_RT kernel recommended for hard real-time
+#
+# EtherCAT provides deterministic, high-speed communication suitable
+# for motion control and precision timing applications.
+
+# ============================================================================
+# Fieldbus Configuration
+# ============================================================================
+
+[fieldbus]
+# EtherCAT driver via SOEM
+driver = "ethercat"
+
+[fieldbus.ethercat]
+# Network interface for EtherCAT communication
+# IMPORTANT: Must be a dedicated interface, not shared with other traffic
+# Use `ip link` or `ifconfig` to find your interface name
+# Modern Linux uses predictable names (e.g., enp3s0, eno1, eth0)
+interface = "enp3s0"
+
+# Enable Distributed Clocks (DC) for synchronized slave outputs
+# Required for:
+#   - Motion control applications
+#   - Coordinated multi-axis movements
+#   - Precise output timing across slaves
+dc_enabled = true
+
+# DC sync0 cycle time
+# Should match or be a multiple of the main cycle_time setting
+# Common values: 250us, 500us, 1ms, 2ms
+dc_sync0_cycle = "1ms"
+
+# Working counter error threshold
+# Number of consecutive WKC errors before triggering a fault
+# Lower values = faster fault detection but more sensitive to transients
+wkc_error_threshold = 3

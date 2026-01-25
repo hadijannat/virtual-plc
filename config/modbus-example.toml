@@ -1,0 +1,52 @@
+# Modbus TCP Fieldbus Configuration
+#
+# This configuration connects to a Modbus TCP server/slave device.
+# Common use cases:
+#   - Industrial PLCs with Modbus TCP support
+#   - Remote I/O modules
+#   - SCADA integration
+#   - Building automation controllers
+#
+# Modbus TCP uses standard Ethernet and is widely supported across
+# industrial equipment. No special network interface required.
+
+# ============================================================================
+# Fieldbus Configuration
+# ============================================================================
+
+[fieldbus]
+# Modbus TCP driver
+driver = "modbustcp"
+
+[fieldbus.modbus]
+# Modbus TCP server address (IP:port)
+# Standard Modbus TCP port is 502
+address = "192.168.1.100:502"
+
+# Modbus unit identifier (slave ID)
+# Typically 1 for direct TCP connections, but may vary for gateways
+unit_id = 1
+
+# Connection and response timeout
+# Increase for slow or remote devices
+timeout = "1s"
+
+# ============================================================================
+# I/O Mapping
+# ============================================================================
+
+# Digital input coils (read-only from PLC perspective)
+# These are discrete inputs from the Modbus device
+digital_input_coils = { address = 0, quantity = 32 }
+
+# Digital output coils (read-write)
+# These control discrete outputs on the Modbus device
+digital_output_coils = { address = 100, quantity = 32 }
+
+# Analog input registers (read-only from PLC perspective)
+# 16-bit input registers, typically holding process values
+analog_input_registers = { address = 0, quantity = 8 }
+
+# Analog output registers (read-write)
+# 16-bit holding registers for setpoints and control values
+analog_output_registers = { address = 100, quantity = 8 }

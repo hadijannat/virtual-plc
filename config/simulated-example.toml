@@ -1,0 +1,27 @@
+# Simulated Fieldbus Configuration
+#
+# This configuration uses a simulated fieldbus driver that requires no
+# hardware. Ideal for:
+#   - Development and testing of PLC logic
+#   - CI/CD pipelines
+#   - Learning the Virtual PLC system
+#
+# All I/O operations work with in-memory values that can be manipulated
+# via the web UI or REST API when enabled.
+
+# ============================================================================
+# Fieldbus Configuration
+# ============================================================================
+
+[fieldbus]
+# Simulated driver - no hardware required
+driver = "simulated"
+
+# ============================================================================
+# Optional: Enable Web UI for I/O visualization
+# ============================================================================
+
+[metrics]
+# Enable the web UI to view and manipulate simulated I/O
+http_export = true
+http_port = 8080

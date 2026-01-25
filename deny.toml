@@ -17,7 +17,10 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
 
 # Ignore specific advisories (with justification)
-ignore = []
+ignore = [
+    # paste is a transitive dependency of wasmtime; no safe alternative available today.
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 # Confidence threshold for license detection

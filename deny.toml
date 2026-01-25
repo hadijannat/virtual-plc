@@ -64,7 +64,6 @@ skip = []
 skip-tree = []
 
 [bans.build]
-allow-build-scripts = ["*"]
 enable-builtin-globs = true
 
 [sources]

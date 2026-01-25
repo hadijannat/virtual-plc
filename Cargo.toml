@@ -7,6 +7,7 @@ members = ["crates/*"]
 name = "virtual-plc"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 publish = false
 
 [[test]]
@@ -16,8 +17,8 @@ path = "tests/acceptance_tests.rs"
 [dev-dependencies]
 wasmparser = { workspace = true }
 libc = { workspace = true }
-plc-compiler = { path = "crates/plc-compiler" }
-plc-runtime = { path = "crates/plc-runtime" }
+plc-compiler = { path = "crates/plc-compiler", version = "0.1.0" }
+plc-runtime = { path = "crates/plc-runtime", version = "0.1.0" }
 tempfile = "3"
 
 [workspace.package]

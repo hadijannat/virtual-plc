@@ -20,10 +20,10 @@ tokio.workspace = true
 toml.workspace = true
 humantime.workspace = true
 libc.workspace = true
-plc-common = { path = "../plc-common" }
-plc-runtime = { path = "../plc-runtime" }
-plc-fieldbus = { path = "../plc-fieldbus" }
-plc-compiler = { path = "../plc-compiler" }
-plc-web-ui = { path = "../plc-web-ui" }
+plc-common = { path = "../plc-common", version = "0.1.0" }
+plc-runtime = { path = "../plc-runtime", version = "0.1.0" }
+plc-fieldbus = { path = "../plc-fieldbus", version = "0.1.0" }
+plc-compiler = { path = "../plc-compiler", version = "0.1.0" }
+plc-web-ui = { path = "../plc-web-ui", version = "0.1.0" }
 wat = "1.0"
 wasmprinter = "0.2"

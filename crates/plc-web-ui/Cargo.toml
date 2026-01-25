@@ -15,7 +15,7 @@ tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-plc-common = { path = "../plc-common" }
+plc-common = { path = "../plc-common", version = "0.1.0" }
 
 # Web framework
 axum = { version = "0.7", features = ["ws"] }

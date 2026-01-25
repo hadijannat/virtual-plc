@@ -19,7 +19,7 @@ crossbeam-utils.workspace = true
 wasmtime.workspace = true
 wat.workspace = true
 static_assertions = "1.1"
-plc-common = { path = "../plc-common" }
+plc-common = { path = "../plc-common", version = "0.1.0" }
 
 [lints.rust]
 # Allow unsafe for real-time glue code (mlockall, sched_setaffinity, etc.)

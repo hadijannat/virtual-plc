@@ -13,4 +13,4 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 serde.workspace = true
-plc-common = { path = "../plc-common" }
+plc-common = { path = "../plc-common", version = "0.1.0" }

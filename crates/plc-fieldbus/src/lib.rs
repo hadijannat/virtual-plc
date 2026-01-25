@@ -6,6 +6,31 @@
 //! - [`modbus`] module with Modbus TCP client support
 //! - [`slave_config`] module with EtherCAT slave configuration
 //! - [`dc_sync`] module with Distributed Clocks synchronization
+//!
+//! # Feature Flags
+//!
+//! - **`simulated`** (default): Enables [`SimulatedDriver`] for testing without hardware.
+//!   Useful for development, CI, and integration testing.
+//!
+//! - **`soem`** (Linux only): Enables real EtherCAT hardware support via the
+//!   [SOEM](https://github.com/OpenEtherCATsociety/SOEM) library using the
+//!   [`soem`](https://docs.rs/soem) Rust crate. Requires:
+//!   - Linux with PREEMPT_RT kernel (recommended for real-time performance)
+//!   - Root privileges or `CAP_NET_RAW` capability for raw socket access
+//!   - SOEM library installed (`libsoem-dev` on Debian/Ubuntu)
+//!
+//! - **`soem-ffi`** (deprecated): Legacy feature flag, use `soem` instead.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use plc_fieldbus::{FieldbusDriver, SimulatedDriver};
+//!
+//! let mut driver = SimulatedDriver::new();
+//! driver.init().expect("Failed to initialize");
+//! driver.exchange().expect("Failed to exchange I/O");
+//! driver.shutdown().expect("Failed to shutdown");
+//! ```
 
 pub mod dc_sync;
 pub mod ethercat;

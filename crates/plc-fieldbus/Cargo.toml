@@ -15,12 +15,21 @@ plc-common = { path = "../plc-common" }
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
 nix.workspace = true
+# SOEM-rs: Rust safe wrapper for Simple Open EtherCAT Master Library
+# See: https://docs.rs/soem/0.2.0 and https://github.com/matwey/SOEM-rs
+# Requires libsoem-dev or SOEM built from source.
+# Fallback plan if crate becomes incompatible: use soem-sys for direct FFI bindings
+# or implement manual FFI via bindgen against upstream SOEM C library.
+soem = { version = "0.2", optional = true }
 
 [features]
 default = ["simulated"]
 # Enable simulated fieldbus for testing without hardware
 simulated = []
-# Enable SOEM FFI bindings (requires libsoem-dev installed)
+# Enable real EtherCAT hardware support via SOEM (Simple Open EtherCAT Master)
+# Requires Linux with raw socket capabilities (CAP_NET_RAW) or root privileges.
+soem = ["dep:soem"]
+# Deprecated: kept for backwards compatibility, use `soem` feature instead
 soem-ffi = []
 
 [lints.rust]

@@ -881,28 +881,627 @@ impl EthercatTransport for SimulatedTransport {
     }
 }
 
-// Placeholder for SOEM FFI transport (feature-gated)
-#[cfg(feature = "soem-ffi")]
+// SOEM-based EtherCAT transport (feature-gated, Linux-only)
+#[cfg(all(feature = "soem", target_os = "linux"))]
 mod soem_transport {
-    //! SOEM FFI bindings.
+    //! SOEM-rs based EtherCAT transport.
     //!
-    //! This module would contain the actual FFI bindings to the SOEM library.
-    //! Requires libsoem-dev to be installed.
+    //! This module provides a real EtherCAT master implementation using the
+    //! `soem` crate, which wraps the Simple Open EtherCAT Master (SOEM) library.
     //!
-    //! To implement:
-    //! 1. Link against libsoem via build.rs
-    //! 2. Declare extern "C" functions for ec_init, ec_config, etc.
-    //! 3. Implement EthercatTransport trait
+    //! # Requirements
+    //!
+    //! - Linux with raw socket capabilities (CAP_NET_RAW) or root privileges
+    //! - libsoem-dev installed or SOEM built from source
+    //!
+    //! # Safety
+    //!
+    //! The SOEM library uses raw Ethernet frames for EtherCAT communication.
+    //! This requires elevated privileges and direct hardware access.
 
     use super::*;
+    use plc_common::error::PlcError;
+    use std::ffi::c_int;
 
-    // extern "C" {
-    //     fn ec_init(ifname: *const c_char) -> c_int;
-    //     fn ec_config(...) -> c_int;
-    //     fn ec_send_processdata() -> c_int;
-    //     fn ec_receive_processdata(timeout: c_int) -> c_int;
-    //     fn ec_close();
-    // }
+    /// Default timeout for SDO operations in microseconds.
+    const SDO_TIMEOUT_US: c_int = 50_000; // 50ms
+
+    /// Default timeout for process data receive in microseconds.
+    const PROCESSDATA_TIMEOUT_US: c_int = 2_000; // 2ms
+
+    /// Maximum number of slaves supported.
+    const MAX_SLAVES: usize = 128;
+
+    /// Maximum number of groups.
+    const MAX_GROUPS: usize = 2;
+
+    /// I/O map size (4KB as per SOEM API).
+    const IO_MAP_SIZE: usize = 4096;
+
+    /// SOEM-based EtherCAT transport.
+    ///
+    /// Provides real EtherCAT communication using the SOEM library via the
+    /// `soem` Rust crate. This transport handles:
+    ///
+    /// - Slave scanning and configuration
+    /// - Process data (PDO) exchange
+    /// - Service data (SDO) read/write
+    /// - Distributed Clocks (DC) configuration
+    ///
+    /// # Thread Safety
+    ///
+    /// The underlying SOEM context is not thread-safe (!Send, !Sync).
+    /// All operations must be performed from the same thread.
+    pub struct SoemTransport {
+        /// Network interface name (e.g., "eth0").
+        interface: String,
+        /// SOEM port for network communication.
+        port: soem::Port,
+        /// Slave array for SOEM context.
+        slaves: Vec<soem::Slave>,
+        /// Slave count returned by SOEM.
+        slave_count: c_int,
+        /// Group configurations.
+        groups: Vec<soem::Group>,
+        /// ESI buffer for EEPROM operations.
+        esibuf: Vec<soem::ESIBuf>,
+        /// ESI map for slave information.
+        esimap: Vec<soem::ESIMap>,
+        /// Error ring buffer.
+        elist: Vec<soem::ERing>,
+        /// Index stack for frame handling.
+        idxstack: Vec<soem::IdxStack>,
+        /// Error flag array.
+        ecaterror: Vec<soem::Boolean>,
+        /// DC time storage.
+        dc_time: i64,
+        /// Sync manager communication types.
+        sm_commtype: Vec<soem::SMCommType>,
+        /// PDO assignment storage.
+        pdo_assign: Vec<soem::PDOAssign>,
+        /// PDO description storage.
+        pdo_desc: Vec<soem::PDODesc>,
+        /// EEPROM sync manager configuration.
+        eep_sm: Vec<soem::EEPROMSM>,
+        /// EEPROM FMMU configuration.
+        eep_fmmu: Vec<soem::EEPROMFMMU>,
+        /// I/O map buffer for process data.
+        io_map: Box<[u8; IO_MAP_SIZE]>,
+        /// Expected working counter for all slaves.
+        expected_wkc: u16,
+        /// Whether the transport is initialized.
+        initialized: bool,
+        /// Cached slave configurations for returning from scan_slaves.
+        cached_slaves: Vec<SlaveConfig>,
+    }
+
+    impl SoemTransport {
+        /// Create a new SOEM transport for the given network interface.
+        ///
+        /// # Arguments
+        ///
+        /// * `interface` - Network interface name (e.g., "eth0", "enp0s25")
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if:
+        /// - The interface name is empty
+        /// - SOEM initialization fails (e.g., insufficient privileges)
+        pub fn new(interface: &str) -> PlcResult<Self> {
+            if interface.is_empty() {
+                return Err(PlcError::FieldbusError(
+                    "Interface name cannot be empty".into(),
+                ));
+            }
+
+            info!(interface, "Creating SOEM transport");
+
+            Ok(Self {
+                interface: interface.to_string(),
+                port: soem::Port::default(),
+                slaves: vec![soem::Slave::default(); MAX_SLAVES + 1], // +1 for master slot
+                slave_count: 0,
+                groups: vec![soem::Group::default(); MAX_GROUPS],
+                esibuf: vec![soem::ESIBuf::default(); MAX_SLAVES],
+                esimap: vec![soem::ESIMap::default(); MAX_SLAVES],
+                elist: vec![soem::ERing::default(); MAX_SLAVES],
+                idxstack: vec![soem::IdxStack::default(); MAX_SLAVES],
+                ecaterror: vec![soem::Boolean::default(); MAX_SLAVES],
+                dc_time: 0,
+                sm_commtype: vec![soem::SMCommType::default(); MAX_SLAVES],
+                pdo_assign: vec![soem::PDOAssign::default(); MAX_SLAVES],
+                pdo_desc: vec![soem::PDODesc::default(); MAX_SLAVES],
+                eep_sm: vec![soem::EEPROMSM::default(); MAX_SLAVES],
+                eep_fmmu: vec![soem::EEPROMFMMU::default(); MAX_SLAVES],
+                io_map: Box::new([0u8; IO_MAP_SIZE]),
+                expected_wkc: 0,
+                initialized: false,
+                cached_slaves: Vec::new(),
+            })
+        }
+
+        /// Initialize SOEM context and open the network interface.
+        ///
+        /// # Safety
+        ///
+        /// This method creates a SOEM context which involves FFI calls to the
+        /// underlying C library. The context holds mutable references to our
+        /// internal buffers, which is safe because:
+        /// - All buffers are owned by this struct and have stable addresses
+        /// - The context lifetime is managed within method calls
+        /// - We ensure buffers outlive any context usage
+        fn init_context(&mut self) -> PlcResult<()> {
+            // Create context with mutable references to our storage
+            // The context is created fresh for each operation that needs it
+            let _context = soem::Context::new(
+                &[&self.interface],
+                &mut self.port,
+                &mut self.slaves,
+                &mut self.slave_count,
+                &mut self.groups,
+                &mut self.esibuf,
+                &mut self.esimap,
+                &mut self.elist,
+                &mut self.idxstack,
+                &mut self.ecaterror,
+                &mut self.dc_time,
+                &mut self.sm_commtype,
+                &mut self.pdo_assign,
+                &mut self.pdo_desc,
+                &mut self.eep_sm,
+                &mut self.eep_fmmu,
+            )
+            .map_err(|e| {
+                PlcError::FieldbusError(format!(
+                    "Failed to initialize SOEM on {}: {:?}",
+                    self.interface, e
+                ))
+            })?;
+
+            self.initialized = true;
+            info!(interface = %self.interface, "SOEM context initialized");
+            Ok(())
+        }
+
+        /// Create a temporary SOEM context for operations.
+        ///
+        /// The context borrows our internal buffers and is used for a single
+        /// operation. This pattern is necessary because SOEM's Context type
+        /// holds mutable references and doesn't implement Clone.
+        fn with_context<F, T>(&mut self, f: F) -> PlcResult<T>
+        where
+            F: FnOnce(&mut soem::Context<'_>) -> PlcResult<T>,
+        {
+            let mut context = soem::Context::new(
+                &[&self.interface],
+                &mut self.port,
+                &mut self.slaves,
+                &mut self.slave_count,
+                &mut self.groups,
+                &mut self.esibuf,
+                &mut self.esimap,
+                &mut self.elist,
+                &mut self.idxstack,
+                &mut self.ecaterror,
+                &mut self.dc_time,
+                &mut self.sm_commtype,
+                &mut self.pdo_assign,
+                &mut self.pdo_desc,
+                &mut self.eep_sm,
+                &mut self.eep_fmmu,
+            )
+            .map_err(|e| {
+                PlcError::FieldbusError(format!(
+                    "Failed to create SOEM context on {}: {:?}",
+                    self.interface, e
+                ))
+            })?;
+
+            f(&mut context)
+        }
+
+        /// Convert SOEM EtherCatState to our SlaveState.
+        fn soem_state_to_slave_state(state: soem::EtherCatState) -> Option<SlaveState> {
+            match state {
+                soem::EtherCatState::Init => Some(SlaveState::Init),
+                soem::EtherCatState::PreOp => Some(SlaveState::PreOp),
+                soem::EtherCatState::SafeOp => Some(SlaveState::SafeOp),
+                soem::EtherCatState::Op => Some(SlaveState::Op),
+                soem::EtherCatState::Boot => Some(SlaveState::Bootstrap),
+                _ => None,
+            }
+        }
+
+        /// Convert our SlaveState to SOEM EtherCatState.
+        fn slave_state_to_soem_state(state: SlaveState) -> soem::EtherCatState {
+            match state {
+                SlaveState::Init => soem::EtherCatState::Init,
+                SlaveState::PreOp => soem::EtherCatState::PreOp,
+                SlaveState::SafeOp => soem::EtherCatState::SafeOp,
+                SlaveState::Op => soem::EtherCatState::Op,
+                SlaveState::Bootstrap => soem::EtherCatState::Boot,
+            }
+        }
+
+        /// Parse SOEM slave info into our SlaveConfig format.
+        fn parse_slave_info(&self, idx: usize, slave: &soem::Slave) -> SlaveConfig {
+            let position = idx as u16;
+            let identity = SlaveIdentity::new(
+                slave.eep_manufacturer(),
+                slave.eep_id(),
+                slave.eep_revision(),
+                0, // Serial not directly available
+            );
+
+            let mut config = SlaveConfig::new(position, identity);
+            config.name = slave.name().to_string();
+            config.configured_address = slave.configured_addr();
+            config.dc_supported = slave.has_dc();
+            config.input_size = slave.input_size() as usize;
+            config.output_size = slave.output_size() as usize;
+            config.state =
+                Self::soem_state_to_slave_state(slave.state()).unwrap_or(SlaveState::Init);
+
+            config
+        }
+    }
+
+    impl EthercatTransport for SoemTransport {
+        fn scan_slaves(&mut self) -> PlcResult<Vec<SlaveConfig>> {
+            info!(interface = %self.interface, "Scanning for EtherCAT slaves");
+
+            // Initialize if not already done
+            if !self.initialized {
+                self.init_context()?;
+            }
+
+            self.with_context(|ctx| {
+                // Scan and configure slaves
+                let slave_count = ctx.config_init(false).map_err(|e| {
+                    PlcError::FieldbusError(format!("Failed to scan slaves: {:?}", e))
+                })?;
+
+                if slave_count == 0 {
+                    warn!("No EtherCAT slaves found on the network");
+                    return Ok(Vec::new());
+                }
+
+                info!(slave_count, "Found EtherCAT slaves");
+
+                // Map I/O for group 0 (default group)
+                // Safety: io_map is a fixed-size array owned by this struct
+                let io_map: &mut [u8; IO_MAP_SIZE] = unsafe {
+                    // We need to transmute because config_map_group expects &'a mut [u8; 4096]
+                    // where 'a matches the context lifetime, but our io_map has a different lifetime.
+                    // This is safe because:
+                    // 1. The io_map is owned by SoemTransport and has a stable address
+                    // 2. We only use the context within this closure
+                    // 3. The io_map outlives the context
+                    &mut *(std::ptr::from_mut(&mut *self.io_map).cast::<[u8; IO_MAP_SIZE]>())
+                };
+
+                ctx.config_map_group(io_map, 0).map_err(|mut errors| {
+                    // Collect first error for reporting
+                    if let Some(e) = errors.next() {
+                        PlcError::FieldbusError(format!("Failed to map I/O: {:?}", e))
+                    } else {
+                        PlcError::FieldbusError("Failed to map I/O: unknown error".into())
+                    }
+                })?;
+
+                // Get expected working counter from group 0
+                self.expected_wkc = ctx.groups()[0].expected_wkc();
+
+                Ok(())
+            })?;
+
+            // Parse slave information after context operations
+            let mut slaves = Vec::new();
+            let count = self.slave_count as usize;
+
+            // SOEM uses 1-based indexing for slaves (0 is master)
+            for idx in 1..=count {
+                if idx < self.slaves.len() {
+                    let slave = &self.slaves[idx];
+                    let config = self.parse_slave_info(idx - 1, slave);
+                    debug!(
+                        position = config.position,
+                        name = %config.name,
+                        vendor = config.identity.vendor_id,
+                        product = config.identity.product_code,
+                        dc = config.dc_supported,
+                        "Discovered slave"
+                    );
+                    slaves.push(config);
+                }
+            }
+
+            self.cached_slaves = slaves.clone();
+            Ok(slaves)
+        }
+
+        fn set_state(&mut self, state: SlaveState) -> PlcResult<()> {
+            let soem_state = Self::slave_state_to_soem_state(state);
+            debug!(?state, "Setting all slaves to state");
+
+            self.with_context(|ctx| {
+                // Set state for all slaves (slave 0 means all)
+                ctx.set_state(soem_state, 0);
+
+                // Write the state to slaves
+                ctx.write_state(0).map_err(|e| {
+                    PlcError::FieldbusError(format!("Failed to write state {:?}: {:?}", state, e))
+                })?;
+
+                // Wait for state transition with timeout
+                let timeout_us = 500_000; // 500ms
+                let actual_state = ctx.check_state(0, soem_state, timeout_us);
+
+                if actual_state != soem_state {
+                    warn!(
+                        expected = ?state,
+                        actual = ?Self::soem_state_to_slave_state(actual_state),
+                        "State transition incomplete"
+                    );
+                }
+
+                Ok(())
+            })
+        }
+
+        fn configure_slave_dc(&mut self, config: &DcSlaveConfig) -> PlcResult<()> {
+            if !config.dc_supported {
+                return Ok(());
+            }
+
+            debug!(
+                position = config.position,
+                sync_mode = ?config.sync_mode,
+                sync0_cycle_ns = config.sync0_cycle_ns,
+                "Configuring DC for slave"
+            );
+
+            self.with_context(|ctx| {
+                // Configure DC using SOEM's config_dc
+                // This sets up distributed clocks for all DC-capable slaves
+                let dc_configured = ctx.config_dc().map_err(|mut errors| {
+                    if let Some(e) = errors.next() {
+                        PlcError::FieldbusError(format!("Failed to configure DC: {:?}", e))
+                    } else {
+                        PlcError::FieldbusError("Failed to configure DC: unknown error".into())
+                    }
+                })?;
+
+                if dc_configured {
+                    info!(position = config.position, "DC configured successfully");
+                } else {
+                    debug!(
+                        position = config.position,
+                        "DC not available for this slave"
+                    );
+                }
+
+                Ok(())
+            })
+        }
+
+        fn read_dc_time(&mut self) -> PlcResult<u64> {
+            self.with_context(|ctx| {
+                let dc_time = ctx.dc_time();
+                Ok(dc_time as u64)
+            })
+        }
+
+        fn exchange(&mut self, outputs: &[u8], inputs: &mut [u8]) -> PlcResult<u16> {
+            // Copy outputs to I/O map
+            let output_len = outputs.len().min(IO_MAP_SIZE / 2);
+            self.io_map[..output_len].copy_from_slice(&outputs[..output_len]);
+
+            let wkc = self.with_context(|ctx| {
+                // Send process data to slaves
+                ctx.send_processdata();
+
+                // Receive process data from slaves with timeout
+                let wkc = ctx.receive_processdata(PROCESSDATA_TIMEOUT_US);
+
+                Ok(wkc)
+            })?;
+
+            // Copy inputs from I/O map
+            // Inputs typically follow outputs in the I/O map
+            let input_start = output_len;
+            let input_len = inputs.len().min(IO_MAP_SIZE - input_start);
+            if input_start + input_len <= IO_MAP_SIZE {
+                inputs[..input_len].copy_from_slice(&self.io_map[input_start..input_start + input_len]);
+            }
+
+            trace!(wkc, expected = self.expected_wkc, "Process data exchange");
+            Ok(wkc)
+        }
+
+        fn sdo_read(&mut self, request: &SdoRequest) -> PlcResult<Vec<u8>> {
+            debug!(
+                slave = request.slave,
+                index = format!("{:#06x}", request.address.index),
+                subindex = request.address.subindex,
+                "SDO read"
+            );
+
+            self.with_context(|ctx| {
+                // Try reading as different sizes and use the first that succeeds
+                // SOEM's read_sdo is generic over the return type
+
+                // Try u32 first (most common)
+                if let Ok(value) = ctx.read_sdo::<u32>(
+                    request.slave + 1, // SOEM uses 1-based slave indexing
+                    request.address.index,
+                    request.address.subindex,
+                    SDO_TIMEOUT_US,
+                ) {
+                    return Ok(value.to_le_bytes().to_vec());
+                }
+
+                // Try u16
+                if let Ok(value) = ctx.read_sdo::<u16>(
+                    request.slave + 1,
+                    request.address.index,
+                    request.address.subindex,
+                    SDO_TIMEOUT_US,
+                ) {
+                    return Ok(value.to_le_bytes().to_vec());
+                }
+
+                // Try u8
+                if let Ok(value) = ctx.read_sdo::<u8>(
+                    request.slave + 1,
+                    request.address.index,
+                    request.address.subindex,
+                    SDO_TIMEOUT_US,
+                ) {
+                    return Ok(vec![value]);
+                }
+
+                Err(PlcError::FieldbusError(format!(
+                    "SDO read failed for slave {} at {:?}",
+                    request.slave, request.address
+                )))
+            })
+        }
+
+        fn sdo_write(&mut self, request: &SdoRequest) -> PlcResult<()> {
+            let data = request.write_data.as_ref().ok_or_else(|| {
+                PlcError::FieldbusError("SDO write requires data".into())
+            })?;
+
+            debug!(
+                slave = request.slave,
+                index = format!("{:#06x}", request.address.index),
+                subindex = request.address.subindex,
+                data_len = data.len(),
+                "SDO write"
+            );
+
+            self.with_context(|ctx| {
+                // Write based on data length
+                let slave_idx = request.slave + 1; // SOEM uses 1-based indexing
+
+                match data.len() {
+                    1 => {
+                        ctx.write_sdo(
+                            slave_idx,
+                            request.address.index,
+                            request.address.subindex,
+                            &data[0],
+                            SDO_TIMEOUT_US,
+                        )
+                        .map_err(|mut errors| {
+                            if let Some(e) = errors.next() {
+                                PlcError::FieldbusError(format!("SDO write failed: {:?}", e))
+                            } else {
+                                PlcError::FieldbusError("SDO write failed: unknown error".into())
+                            }
+                        })?;
+                    }
+                    2 => {
+                        let value = u16::from_le_bytes([data[0], data[1]]);
+                        ctx.write_sdo(
+                            slave_idx,
+                            request.address.index,
+                            request.address.subindex,
+                            &value,
+                            SDO_TIMEOUT_US,
+                        )
+                        .map_err(|mut errors| {
+                            if let Some(e) = errors.next() {
+                                PlcError::FieldbusError(format!("SDO write failed: {:?}", e))
+                            } else {
+                                PlcError::FieldbusError("SDO write failed: unknown error".into())
+                            }
+                        })?;
+                    }
+                    4 => {
+                        let value = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+                        ctx.write_sdo(
+                            slave_idx,
+                            request.address.index,
+                            request.address.subindex,
+                            &value,
+                            SDO_TIMEOUT_US,
+                        )
+                        .map_err(|mut errors| {
+                            if let Some(e) = errors.next() {
+                                PlcError::FieldbusError(format!("SDO write failed: {:?}", e))
+                            } else {
+                                PlcError::FieldbusError("SDO write failed: unknown error".into())
+                            }
+                        })?;
+                    }
+                    _ => {
+                        return Err(PlcError::FieldbusError(format!(
+                            "Unsupported SDO write data length: {} (expected 1, 2, or 4)",
+                            data.len()
+                        )));
+                    }
+                }
+
+                Ok(())
+            })
+        }
+
+        fn close(&mut self) -> PlcResult<()> {
+            info!(interface = %self.interface, "Closing SOEM transport");
+
+            // Transition slaves to INIT state before closing
+            if self.initialized {
+                if let Err(e) = self.set_state(SlaveState::Init) {
+                    warn!(error = %e, "Failed to set slaves to INIT during close");
+                }
+            }
+
+            // Clear cached state
+            self.initialized = false;
+            self.cached_slaves.clear();
+            self.expected_wkc = 0;
+            self.slave_count = 0;
+
+            // The SOEM context is dropped automatically when it goes out of scope
+            // in with_context, which handles cleanup via its Drop implementation
+
+            debug!("SOEM transport closed");
+            Ok(())
+        }
+    }
+
+    impl std::fmt::Debug for SoemTransport {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("SoemTransport")
+                .field("interface", &self.interface)
+                .field("initialized", &self.initialized)
+                .field("slave_count", &self.slave_count)
+                .field("expected_wkc", &self.expected_wkc)
+                .finish_non_exhaustive()
+        }
+    }
+}
+
+// Re-export SoemTransport when the feature is enabled (Linux-only)
+#[cfg(all(feature = "soem", target_os = "linux"))]
+pub use soem_transport::SoemTransport;
+
+// Placeholder for legacy SOEM FFI transport (deprecated feature)
+#[cfg(feature = "soem-ffi")]
+mod soem_ffi_transport {
+    //! Legacy SOEM FFI bindings (deprecated).
+    //!
+    //! This module is kept for backwards compatibility.
+    //! Use the `soem` feature instead, which provides the `SoemTransport` type.
+    //!
+    //! To migrate:
+    //! 1. Replace `--features soem-ffi` with `--features soem`
+    //! 2. Use `SoemTransport::new(interface)` instead of manual FFI
+
+    #![allow(dead_code)]
+    use super::*;
 }
 
 #[cfg(test)]

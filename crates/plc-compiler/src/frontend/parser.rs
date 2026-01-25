@@ -582,15 +582,29 @@ fn parse_arguments(pair: Pair<Rule>) -> Result<Vec<CallArgument>> {
 
             if parts.len() == 2 {
                 // Named argument
-                let name = Some(parts[0].as_str().to_string());
-                let value_span = span_from_pair(&parts[1]);
-                let value = Spanned::new(parse_expression(parts.pop().unwrap())?, value_span);
+                let value_part = parts
+                    .pop()
+                    .ok_or_else(|| anyhow!("Missing value in named argument"))?;
+                let name_part = parts
+                    .pop()
+                    .ok_or_else(|| anyhow!("Missing name in named argument"))?;
+                let name = Some(name_part.as_str().to_string());
+                let value_span = span_from_pair(&value_part);
+                let value = Spanned::new(parse_expression(value_part)?, value_span);
                 args.push(CallArgument { name, value });
-            } else {
+            } else if parts.len() == 1 {
                 // Positional argument
-                let value_span = span_from_pair(&parts[0]);
-                let value = Spanned::new(parse_expression(parts.pop().unwrap())?, value_span);
+                let value_part = parts
+                    .pop()
+                    .ok_or_else(|| anyhow!("Missing value in positional argument"))?;
+                let value_span = span_from_pair(&value_part);
+                let value = Spanned::new(parse_expression(value_part)?, value_span);
                 args.push(CallArgument { name: None, value });
+            } else {
+                return Err(anyhow!(
+                    "Invalid argument format (expected 1 or 2 parts, got {})",
+                    parts.len()
+                ));
             }
         }
     }
@@ -1061,6 +1075,21 @@ mod tests {
             }
             _ => panic!("Expected Function"),
         }
+    }
+
+    #[test]
+    fn test_parse_call_with_missing_argument_errors() {
+        let source = r#"
+            PROGRAM Test
+            VAR
+                x : INT;
+            END_VAR
+                Foo(,);
+            END_PROGRAM
+        "#;
+
+        let result = parse(source);
+        assert!(result.is_err());
     }
 
     #[test]

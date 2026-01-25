@@ -4,7 +4,7 @@ This guide walks you through setting up Virtual PLC and running your first progr
 
 ## Prerequisites
 
-- **Rust toolchain**: 1.76 or later (`rustup update stable`)
+- **Rust toolchain**: 1.83 or later (`rustup update stable`)
 - **Git**: For cloning the repository
 - **Optional**: Docker for containerized deployment
 
@@ -79,12 +79,15 @@ For initial testing without hardware:
 
 ```bash
 # Run with simulated I/O
-cargo run -p plc-daemon -- run --wasm counter.wasm --simulate
+cargo run -p plc-daemon -- run --wasm-module counter.wasm --simulated
 ```
 
-The `--simulate` flag creates virtual I/O that you can monitor through the web interface.
+The `--simulated` (or `-s`) flag creates virtual I/O that you can monitor through the web interface.
 
 ### 4. Monitor via Web UI
+
+The Web UI is disabled by default. Enable it by setting `metrics.http_export = true`
+in your config file, then run the daemon with `--config`.
 
 While the daemon is running, open your browser to:
 
@@ -141,36 +144,49 @@ Run any example:
 
 ```bash
 cargo run -p plc-daemon -- compile examples/blink.st -o blink.wasm
-cargo run -p plc-daemon -- run --wasm blink.wasm --simulate
+cargo run -p plc-daemon -- run --wasm-module blink.wasm --simulated
 ```
 
 ## Configuration
 
-### Cycle Time
-
-Configure the scan cycle period (default: 1ms):
+Runtime settings are configured via a TOML configuration file. Pass the config file with `--config`:
 
 ```bash
-cargo run -p plc-daemon -- run --wasm app.wasm --cycle-time 500us
+cargo run -p plc-daemon -- run --config config/my-config.toml --wasm-module app.wasm
 ```
 
-### Web UI Port
+### Example Configuration File
 
-Change the web server port:
+Create a configuration file (e.g., `config/my-config.toml`):
 
-```bash
-cargo run -p plc-daemon -- run --wasm app.wasm --web-port 9090
+```toml
+# Cycle time (default: 1ms)
+cycle_time = "500us"
+
+[metrics]
+# Enable web UI and metrics endpoint
+http_export = true
+http_port = 9090
+
+[fieldbus]
+# Options: "simulated", "ethercat", "modbus_tcp"
+driver = "ethercat"
+
+[fieldbus.ethercat]
+interface = "eth0"
 ```
 
-### Fieldbus Configuration
+### Key Configuration Options
 
-For real hardware with EtherCAT:
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `cycle_time` | Scan cycle period (duration string) | 1ms |
+| `metrics.http_export` | Enable web UI and Prometheus metrics | false |
+| `metrics.http_port` | HTTP server port | 8080 |
+| `fieldbus.driver` | Fieldbus type (simulated/ethercat/modbus_tcp) | simulated |
+| `fieldbus.ethercat.interface` | Network interface for EtherCAT | eth0 |
 
-```bash
-cargo run -p plc-daemon -- run --wasm app.wasm \
-    --fieldbus ethercat \
-    --interface eth0
-```
+See `config/default.toml` for a complete example with all available options.
 
 ## Real-Time Setup (Linux)
 

@@ -635,14 +635,16 @@ impl FieldbusDriver for EthercatMaster {
         let pi = &self.process_image;
         let mut inputs = crate::FieldbusInputs::default();
 
-        // Read digital inputs from first byte
-        if let Some(di) = pi.read_input_byte(0) {
-            inputs.digital = u32::from(di);
+        // Read digital inputs (4 bytes = 32 bits, little-endian)
+        // Layout: bytes 0-3 = digital inputs
+        if let Some(di) = pi.read_input_u32(0) {
+            inputs.digital = di;
         }
 
         // Read analog inputs (2 bytes each, little-endian)
+        // Layout: bytes 4+ = analog inputs (16 channels * 2 bytes = 32 bytes)
         for (i, ai) in inputs.analog.iter_mut().enumerate() {
-            if let Some(val) = pi.read_input_u16(1 + i * 2) {
+            if let Some(val) = pi.read_input_u16(4 + i * 2) {
                 *ai = val as i16;
             }
         }
@@ -653,12 +655,14 @@ impl FieldbusDriver for EthercatMaster {
     fn set_outputs(&mut self, outputs: &crate::FieldbusOutputs) {
         let pi = self.process_image_mut();
 
-        // Write digital outputs to first byte
-        pi.write_output_byte(0, outputs.digital as u8);
+        // Write digital outputs (4 bytes = 32 bits, little-endian)
+        // Layout: bytes 0-3 = digital outputs
+        pi.write_output_u32(0, outputs.digital);
 
         // Write analog outputs (2 bytes each, little-endian)
+        // Layout: bytes 4+ = analog outputs (16 channels * 2 bytes = 32 bytes)
         for (i, ao) in outputs.analog.iter().enumerate() {
-            pi.write_output_u16(1 + i * 2, *ao as u16);
+            pi.write_output_u16(4 + i * 2, *ao as u16);
         }
     }
 

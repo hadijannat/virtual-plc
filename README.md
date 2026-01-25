@@ -197,10 +197,10 @@ cargo test -q
 
 ```bash
 # Start daemon with simulated fieldbus
-cargo run -p plc-daemon -- --simulated
+cargo run -p plc-daemon -- run --simulated
 
 # With a compiled Wasm module
-cargo run -p plc-daemon -- --simulated -w programs/blink.wasm
+cargo run -p plc-daemon -- run --simulated -w programs/blink.wasm
 ```
 
 ### Compile ST to Wasm
@@ -224,7 +224,7 @@ let wasm_bytes = compile(source).expect("Compilation failed");
 
 ## ⚙️ Configuration
 
-### CLI Flags
+### CLI Flags (for `run` subcommand)
 
 | Flag | Description |
 |------|-------------|
@@ -233,6 +233,8 @@ let wasm_bytes = compile(source).expect("Compilation failed");
 | `-s, --simulated` | Use simulated fieldbus (no hardware) |
 | `--max-cycles <N>` | Maximum cycles to run (0 = infinite) |
 | `-l, --log-level <LEVEL>` | Log level (trace, debug, info, warn, error) |
+
+See `plc-daemon --help` for all available subcommands (`run`, `compile`, `validate`, `simulate`, `diagnose`).
 
 ### TOML Configuration
 
@@ -472,7 +474,7 @@ cargo build
 cargo test
 
 # Run with simulated I/O
-cargo run -p plc-daemon -- --simulated
+cargo run -p plc-daemon -- run --simulated
 ```
 
 ### Code Style

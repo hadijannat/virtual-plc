@@ -42,7 +42,10 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
         .status-init { background: #f59e0b; color: #000; }
         .status-fault { background: #ef4444; color: #fff; }
         .status-stop { background: #6b7280; color: #fff; }
-        .status-disconnected { background: #374151; color: #9ca3af; }
+        .status-boot { background: #8b5cf6; color: #fff; }
+        .status-pre_op { background: #f59e0b; color: #000; }
+        .status-safe_stop { background: #fb923c; color: #000; }
+        .status-disconnected, .status-unknown { background: #374151; color: #9ca3af; }
 
         .container { padding: 1.5rem 2rem; }
 
@@ -361,7 +364,9 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
         function updateState(state) {
             const badge = document.getElementById('runtime-state');
             badge.textContent = state;
-            badge.className = 'status-badge status-' + state.toLowerCase();
+            // Handle disconnect state ('--') and normalize to CSS class
+            const stateClass = state === '--' ? 'unknown' : state.toLowerCase();
+            badge.className = 'status-badge status-' + stateClass;
         }
 
         // Add fault to list using safe DOM methods

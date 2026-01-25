@@ -41,7 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Modbus TCP**: Full implementation with all standard function codes
   - Read Coils (0x01), Read Holding Registers (0x03)
   - Write Single Coil (0x05), Write Multiple Registers (0x10)
-  - Connection pooling and reconnection logic
+  - Automatic reconnection with configurable retry limits
+  - Response validation (unit ID, function code, byte count)
   - Exception handling
 
 #### Web UI
@@ -86,9 +87,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced diagnose command with comprehensive system checks
 
 ### Security
-- Wasm fuel-based execution limits prevent infinite loops
+- Wasm fuel-based execution limits prevent infinite loops (enabled by default)
+- Wasm memory limit (1MB default) prevents memory exhaustion
 - Process image bounds checking
-- Rate-limited host functions (plc_trace)
+- Rate-limited host functions (10,000 calls per cycle max)
+- Log message ring buffer prevents memory exhaustion (1,000 message cap)
 - WebSocket broadcast channel prevents memory exhaustion
 
 ## [0.0.1] - 2024-01-15

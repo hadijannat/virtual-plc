@@ -391,6 +391,14 @@ impl ModbusTcpDriver {
             )));
         }
 
+        // Validate unit ID matches request
+        if response_header.unit_id != self.config.unit_id {
+            return Err(PlcError::FieldbusError(format!(
+                "Unit ID mismatch: expected {}, got {}",
+                self.config.unit_id, response_header.unit_id
+            )));
+        }
+
         // Read response PDU
         let pdu_length = (response_header.length - 1) as usize; // -1 for unit_id
         if pdu_length > self.rx_buffer.len() - MbapHeader::SIZE {
@@ -459,7 +467,27 @@ impl ModbusTcpDriver {
             return Err(PlcError::FieldbusError("Response too short".into()));
         }
 
+        // Validate function code matches request (response[0] should echo the function code)
+        let response_function = response[0];
+        if response_function != function as u8 {
+            return Err(PlcError::FieldbusError(format!(
+                "Function code mismatch: expected 0x{:02X}, got 0x{:02X}",
+                function as u8, response_function
+            )));
+        }
+
         let byte_count = response[1] as usize;
+
+        // Validate byte_count matches expected size for the requested quantity
+        // (quantity bits require ceil(quantity/8) bytes)
+        let expected_bytes = (quantity as usize + 7) / 8;
+        if byte_count < expected_bytes {
+            return Err(PlcError::FieldbusError(format!(
+                "Byte count mismatch: expected at least {} bytes for {} bits, got {}",
+                expected_bytes, quantity, byte_count
+            )));
+        }
+
         if response.len() < 2 + byte_count {
             return Err(PlcError::FieldbusError(format!(
                 "Expected {} data bytes, got {}",
@@ -499,6 +527,15 @@ impl ModbusTcpDriver {
 
         if response.len() < 2 {
             return Err(PlcError::FieldbusError("Response too short".into()));
+        }
+
+        // Validate function code matches request
+        let response_function = response[0];
+        if response_function != function as u8 {
+            return Err(PlcError::FieldbusError(format!(
+                "Function code mismatch: expected 0x{:02X}, got 0x{:02X}",
+                function as u8, response_function
+            )));
         }
 
         let byte_count = response[1] as usize;
@@ -557,6 +594,16 @@ impl ModbusTcpDriver {
             return Err(PlcError::FieldbusError("Response too short".into()));
         }
 
+        // Validate function code matches request
+        let response_function = response[0];
+        if response_function != FunctionCode::WriteMultipleCoils as u8 {
+            return Err(PlcError::FieldbusError(format!(
+                "Function code mismatch: expected 0x{:02X}, got 0x{:02X}",
+                FunctionCode::WriteMultipleCoils as u8,
+                response_function
+            )));
+        }
+
         let resp_address = u16::from_be_bytes([response[1], response[2]]);
         let resp_quantity = u16::from_be_bytes([response[3], response[4]]);
 
@@ -590,6 +637,16 @@ impl ModbusTcpDriver {
         // Verify response
         if response.len() < 5 {
             return Err(PlcError::FieldbusError("Response too short".into()));
+        }
+
+        // Validate function code matches request
+        let response_function = response[0];
+        if response_function != FunctionCode::WriteMultipleRegisters as u8 {
+            return Err(PlcError::FieldbusError(format!(
+                "Function code mismatch: expected 0x{:02X}, got 0x{:02X}",
+                FunctionCode::WriteMultipleRegisters as u8,
+                response_function
+            )));
         }
 
         let resp_address = u16::from_be_bytes([response[1], response[2]]);

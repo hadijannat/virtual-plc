@@ -3,9 +3,10 @@
 //! This module defines the shared state that is updated by the runtime
 //! and read by the web API and WebSocket handlers.
 
+use crate::PlcMetrics;
 use plc_common::state::RuntimeState;
 use serde::{Deserialize, Serialize};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio::sync::broadcast;
 
@@ -133,11 +134,23 @@ impl SharedState {
 /// Handle for updating shared state from the runtime.
 #[derive(Clone)]
 pub struct StateUpdater {
-    pub(crate) state: std::sync::Arc<SharedState>,
+    pub(crate) state: Arc<SharedState>,
     pub(crate) broadcast_tx: broadcast::Sender<StateUpdate>,
+    pub(crate) metrics: Option<Arc<PlcMetrics>>,
 }
 
 impl StateUpdater {
+    fn runtime_state_metric_value(state: RuntimeState) -> i64 {
+        match state {
+            RuntimeState::Boot => 0,
+            RuntimeState::Init => 1,
+            RuntimeState::PreOp => 2,
+            RuntimeState::Run => 3,
+            RuntimeState::Fault => 4,
+            RuntimeState::SafeStop => 5,
+        }
+    }
+
     /// Update the runtime state.
     pub fn set_runtime_state(&self, state: RuntimeState) {
         if let Ok(mut guard) = self.state.runtime_state.write() {
@@ -146,6 +159,13 @@ impl StateUpdater {
         let _ = self.broadcast_tx.send(StateUpdate::StateChange {
             state: state.to_string(),
         });
+
+        // Update Prometheus metrics
+        if let Some(ref metrics) = self.metrics {
+            metrics
+                .runtime_state
+                .set(Self::runtime_state_metric_value(state));
+        }
     }
 
     /// Update I/O values.
@@ -153,7 +173,12 @@ impl StateUpdater {
         if let Ok(mut guard) = self.state.io.write() {
             *guard = io.clone();
         }
-        let _ = self.broadcast_tx.send(StateUpdate::Io(io));
+        let _ = self.broadcast_tx.send(StateUpdate::Io(io.clone()));
+
+        // Update Prometheus metrics
+        if let Some(ref metrics) = self.metrics {
+            metrics.update_from_io(&io);
+        }
     }
 
     /// Update metrics.
@@ -161,7 +186,14 @@ impl StateUpdater {
         if let Ok(mut guard) = self.state.metrics.write() {
             *guard = metrics.clone();
         }
-        let _ = self.broadcast_tx.send(StateUpdate::Metrics(metrics));
+        let _ = self
+            .broadcast_tx
+            .send(StateUpdate::Metrics(metrics.clone()));
+
+        // Update Prometheus metrics
+        if let Some(ref prom_metrics) = self.metrics {
+            prom_metrics.update_from_snapshot(&metrics);
+        }
     }
 
     /// Record a fault.
@@ -188,6 +220,11 @@ impl StateUpdater {
             }
         }
         let _ = self.broadcast_tx.send(StateUpdate::Fault(fault));
+
+        // Update Prometheus metrics
+        if let Some(ref metrics) = self.metrics {
+            metrics.record_fault();
+        }
     }
 
     /// Send a full state snapshot (useful for new WebSocket connections).

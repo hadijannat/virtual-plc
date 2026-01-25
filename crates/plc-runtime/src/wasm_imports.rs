@@ -19,8 +19,17 @@
 use crate::wasm_memory::{
     read_ai_from_memory, read_di_from_memory, write_ao_to_memory, write_do_to_memory,
 };
+use std::collections::VecDeque;
 use tracing::{trace, warn};
 use wasmtime::{Caller, Linker, Memory, ResourceLimiter, StoreLimits, StoreLimitsBuilder};
+
+/// Maximum number of log messages to buffer from Wasm.
+/// When exceeded, oldest messages are evicted (ring buffer behavior).
+const MAX_LOG_BUFFER_SIZE: usize = 1000;
+
+/// Default maximum host function calls per cycle.
+/// Per threat model AS4.1, prevents DoS via excessive host function calls.
+const DEFAULT_MAX_HOST_CALLS_PER_CYCLE: u32 = 10_000;
 
 /// Host state accessible from Wasm host functions.
 ///
@@ -34,10 +43,16 @@ pub struct HostState {
     pub cycle_count: u64,
     /// Whether we're in first-cycle mode.
     pub first_cycle: bool,
-    /// Log buffer for messages from Wasm.
-    pub log_buffer: Vec<String>,
+    /// Log buffer for messages from Wasm (ring buffer with MAX_LOG_BUFFER_SIZE cap).
+    pub log_buffer: VecDeque<String>,
     /// Resource limiter for memory/table growth control.
     limits: StoreLimits,
+    /// Host function call counter for current cycle (rate limiting).
+    host_call_count: u32,
+    /// Maximum host function calls allowed per cycle.
+    max_host_calls_per_cycle: u32,
+    /// Whether rate limit was hit this cycle (for diagnostics).
+    pub rate_limit_hit: bool,
 }
 
 impl std::fmt::Debug for HostState {
@@ -48,6 +63,8 @@ impl std::fmt::Debug for HostState {
             .field("cycle_count", &self.cycle_count)
             .field("first_cycle", &self.first_cycle)
             .field("log_buffer_len", &self.log_buffer.len())
+            .field("host_call_count", &self.host_call_count)
+            .field("rate_limit_hit", &self.rate_limit_hit)
             .finish()
     }
 }
@@ -59,8 +76,11 @@ impl Default for HostState {
             cycle_time_ns: 1_000_000, // 1ms default
             cycle_count: 0,
             first_cycle: true,
-            log_buffer: Vec::new(),
+            log_buffer: VecDeque::new(),
             limits: StoreLimitsBuilder::new().build(),
+            host_call_count: 0,
+            max_host_calls_per_cycle: DEFAULT_MAX_HOST_CALLS_PER_CYCLE,
+            rate_limit_hit: false,
         }
     }
 }
@@ -116,9 +136,42 @@ impl HostState {
     }
 
     /// Increment cycle count and clear first-cycle flag.
+    /// Also resets rate limiting state for the new cycle.
     pub fn advance_cycle(&mut self) {
         self.cycle_count += 1;
         self.first_cycle = false;
+        self.host_call_count = 0;
+        self.rate_limit_hit = false;
+    }
+
+    /// Add a log message to the buffer with ring buffer eviction.
+    ///
+    /// When the buffer is full, the oldest message is removed to make room.
+    pub fn push_log(&mut self, message: String) {
+        if self.log_buffer.len() >= MAX_LOG_BUFFER_SIZE {
+            self.log_buffer.pop_front();
+        }
+        self.log_buffer.push_back(message);
+    }
+
+    /// Check if a host function call is allowed under rate limiting.
+    ///
+    /// Returns true if the call is allowed, false if rate limit exceeded.
+    /// Increments the call counter if allowed.
+    pub fn check_rate_limit(&mut self) -> bool {
+        if self.host_call_count >= self.max_host_calls_per_cycle {
+            if !self.rate_limit_hit {
+                warn!(
+                    max = self.max_host_calls_per_cycle,
+                    cycle = self.cycle_count,
+                    "Host function rate limit exceeded"
+                );
+                self.rate_limit_hit = true;
+            }
+            return false;
+        }
+        self.host_call_count += 1;
+        true
     }
 }
 
@@ -156,6 +209,11 @@ fn get_memory(caller: &mut Caller<'_, HostState>) -> Option<Memory> {
 
 /// Read a digital input bit.
 fn host_read_di(mut caller: Caller<'_, HostState>, bit: i32) -> i32 {
+    // Rate limit check (per threat model AS4.1)
+    if !caller.data_mut().check_rate_limit() {
+        return 0;
+    }
+
     if let Some(memory) = get_memory(&mut caller) {
         let data = memory.data(&caller);
         let value = read_di_from_memory(data, bit as u32);
@@ -173,6 +231,11 @@ fn host_read_di(mut caller: Caller<'_, HostState>, bit: i32) -> i32 {
 
 /// Write a digital output bit.
 fn host_write_do(mut caller: Caller<'_, HostState>, bit: i32, value: i32) {
+    // Rate limit check (per threat model AS4.1)
+    if !caller.data_mut().check_rate_limit() {
+        return;
+    }
+
     if let Some(memory) = get_memory(&mut caller) {
         let data = memory.data_mut(&mut caller);
         write_do_to_memory(data, bit as u32, value != 0);
@@ -184,6 +247,11 @@ fn host_write_do(mut caller: Caller<'_, HostState>, bit: i32, value: i32) {
 
 /// Read an analog input channel.
 fn host_read_ai(mut caller: Caller<'_, HostState>, channel: i32) -> i32 {
+    // Rate limit check (per threat model AS4.1)
+    if !caller.data_mut().check_rate_limit() {
+        return 0;
+    }
+
     if let Some(memory) = get_memory(&mut caller) {
         let data = memory.data(&caller);
         let value = read_ai_from_memory(data, channel as u32);
@@ -197,6 +265,11 @@ fn host_read_ai(mut caller: Caller<'_, HostState>, channel: i32) -> i32 {
 
 /// Write an analog output channel.
 fn host_write_ao(mut caller: Caller<'_, HostState>, channel: i32, value: i32) {
+    // Rate limit check (per threat model AS4.1)
+    if !caller.data_mut().check_rate_limit() {
+        return;
+    }
+
     if let Some(memory) = get_memory(&mut caller) {
         let data = memory.data_mut(&mut caller);
         // Clamp to i16 range
@@ -211,7 +284,11 @@ fn host_write_ao(mut caller: Caller<'_, HostState>, channel: i32, value: i32) {
 /// Get the cycle time in nanoseconds.
 ///
 /// Note: Returns i32 for Wasm ABI compatibility. Values > i32::MAX are capped.
-fn host_get_cycle_time(caller: Caller<'_, HostState>) -> i32 {
+fn host_get_cycle_time(mut caller: Caller<'_, HostState>) -> i32 {
+    // Rate limit check (per threat model AS4.1)
+    if !caller.data_mut().check_rate_limit() {
+        return 0;
+    }
     let cycle_time = caller.data().cycle_time_ns;
     trace!(cycle_time_ns = cycle_time, "get_cycle_time");
     // Cap at i32::MAX for ABI compatibility (cycle times > ~2.1s will be capped)
@@ -219,14 +296,22 @@ fn host_get_cycle_time(caller: Caller<'_, HostState>) -> i32 {
 }
 
 /// Get the current cycle count.
-fn host_get_cycle_count(caller: Caller<'_, HostState>) -> i64 {
+fn host_get_cycle_count(mut caller: Caller<'_, HostState>) -> i64 {
+    // Rate limit check (per threat model AS4.1)
+    if !caller.data_mut().check_rate_limit() {
+        return 0;
+    }
     let count = caller.data().cycle_count;
     trace!(cycle_count = count, "get_cycle_count");
     count as i64
 }
 
 /// Check if this is the first cycle after initialization.
-fn host_is_first_cycle(caller: Caller<'_, HostState>) -> i32 {
+fn host_is_first_cycle(mut caller: Caller<'_, HostState>) -> i32 {
+    // Rate limit check (per threat model AS4.1)
+    if !caller.data_mut().check_rate_limit() {
+        return 0;
+    }
     let first = caller.data().first_cycle;
     trace!(first_cycle = first, "is_first_cycle");
     if first {
@@ -243,6 +328,11 @@ fn host_is_first_cycle(caller: Caller<'_, HostState>) -> i32 {
 /// This function validates that `ptr` and `len` are non-negative and that
 /// the memory range `[ptr, ptr+len)` is within bounds before accessing memory.
 fn host_log_message(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) {
+    // Rate limit check (per threat model AS4.1)
+    if !caller.data_mut().check_rate_limit() {
+        return;
+    }
+
     // Validate inputs from Wasm - could be malicious
     if ptr < 0 || len < 0 {
         warn!(ptr, len, "log_message called with negative values");
@@ -284,7 +374,7 @@ fn host_log_message(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) {
 
     if let Some(msg) = msg {
         tracing::info!(wasm_log = %msg, "PLC program log");
-        caller.data_mut().log_buffer.push(msg);
+        caller.data_mut().push_log(msg);
     }
 }
 
@@ -339,6 +429,45 @@ mod tests {
 
         state.advance_cycle();
         assert_eq!(state.cycle_count, 2);
+    }
+
+    #[test]
+    fn test_rate_limiting() {
+        let mut state = HostState::default();
+
+        // Should allow calls up to limit
+        for _ in 0..DEFAULT_MAX_HOST_CALLS_PER_CYCLE {
+            assert!(state.check_rate_limit());
+        }
+
+        // Next call should be rejected
+        assert!(!state.check_rate_limit());
+        assert!(state.rate_limit_hit);
+
+        // After cycle advance, should allow again
+        state.advance_cycle();
+        assert!(!state.rate_limit_hit);
+        assert!(state.check_rate_limit());
+    }
+
+    #[test]
+    fn test_log_buffer_ring_eviction() {
+        let mut state = HostState::default();
+
+        // Fill buffer beyond capacity
+        for i in 0..(MAX_LOG_BUFFER_SIZE + 100) {
+            state.push_log(format!("msg{}", i));
+        }
+
+        // Should be capped at MAX_LOG_BUFFER_SIZE
+        assert_eq!(state.log_buffer.len(), MAX_LOG_BUFFER_SIZE);
+
+        // Oldest messages should be evicted (first 100 are gone)
+        assert_eq!(state.log_buffer.front(), Some(&"msg100".to_string()));
+        assert_eq!(
+            state.log_buffer.back(),
+            Some(&format!("msg{}", MAX_LOG_BUFFER_SIZE + 99))
+        );
     }
 
     #[test]

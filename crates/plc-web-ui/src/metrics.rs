@@ -9,6 +9,7 @@ use axum::{
 use prometheus::{
     Gauge, GaugeVec, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry, TextEncoder,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Prometheus metrics registry and collectors.
@@ -63,6 +64,12 @@ pub struct PlcMetrics {
 
     /// Analog outputs by channel.
     pub analog_outputs: GaugeVec,
+
+    /// Last observed total cycles (for counter synchronization).
+    last_cycles_total: AtomicU64,
+
+    /// Last observed total overruns (for counter synchronization).
+    last_overruns_total: AtomicU64,
 }
 
 impl PlcMetrics {
@@ -78,7 +85,7 @@ impl PlcMetrics {
 
         let runtime_state = IntGauge::new(
             "plc_runtime_state",
-            "Current runtime state (0=Boot, 1=PreOp, 2=Run, 3=Stop, 4=Fault)",
+            "Current runtime state (0=Boot, 1=Init, 2=PreOp, 3=Run, 4=Fault, 5=SafeStop)",
         )
         .expect("metric creation should succeed");
 
@@ -245,12 +252,15 @@ impl PlcMetrics {
             digital_outputs,
             analog_inputs,
             analog_outputs,
+            last_cycles_total: AtomicU64::new(0),
+            last_overruns_total: AtomicU64::new(0),
         }
     }
 
     /// Record a completed cycle with its execution time.
     pub fn record_cycle(&self, duration_us: u64) {
         self.cycles_total.inc();
+        self.last_cycles_total.fetch_add(1, Ordering::Relaxed);
         self.cycle_time_us.set(duration_us as f64);
         self.cycle_duration
             .observe(duration_us as f64 / 1_000_000.0);
@@ -259,6 +269,7 @@ impl PlcMetrics {
     /// Record a cycle overrun.
     pub fn record_overrun(&self) {
         self.overruns_total.inc();
+        self.last_overruns_total.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a fault.
@@ -268,9 +279,36 @@ impl PlcMetrics {
 
     /// Update metrics from a metrics snapshot.
     pub fn update_from_snapshot(&self, metrics: &crate::state::MetricsSnapshot) {
-        self.cycles_total.reset();
-        // Note: IntCounter doesn't support set(), so we track total via cycles_total.inc()
-        // For accurate total, use the snapshot value directly in the output
+        let new_cycles = metrics.total_cycles;
+        let last_cycles = self.last_cycles_total.load(Ordering::Relaxed);
+        if new_cycles < last_cycles {
+            self.cycles_total.reset();
+            if new_cycles > 0 {
+                self.cycles_total.inc_by(new_cycles);
+            }
+        } else {
+            let delta = new_cycles - last_cycles;
+            if delta > 0 {
+                self.cycles_total.inc_by(delta);
+            }
+        }
+        self.last_cycles_total.store(new_cycles, Ordering::Relaxed);
+
+        let new_overruns = metrics.overrun_count;
+        let last_overruns = self.last_overruns_total.load(Ordering::Relaxed);
+        if new_overruns < last_overruns {
+            self.overruns_total.reset();
+            if new_overruns > 0 {
+                self.overruns_total.inc_by(new_overruns);
+            }
+        } else {
+            let delta = new_overruns - last_overruns;
+            if delta > 0 {
+                self.overruns_total.inc_by(delta);
+            }
+        }
+        self.last_overruns_total
+            .store(new_overruns, Ordering::Relaxed);
 
         self.cycle_time_min_us.set(metrics.min_us as f64);
         self.cycle_time_max_us.set(metrics.max_us as f64);
@@ -383,5 +421,36 @@ mod tests {
 
         assert!((metrics.digital_inputs.get() - 255.0).abs() < 0.001);
         assert!((metrics.digital_outputs.get() - 15.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_update_from_snapshot_updates_totals() {
+        let metrics = PlcMetrics::new();
+
+        let snapshot = crate::state::MetricsSnapshot {
+            total_cycles: 10,
+            min_us: 100,
+            max_us: 200,
+            avg_us: 150,
+            target_us: 100,
+            overrun_count: 2,
+            jitter_us: 100,
+        };
+        metrics.update_from_snapshot(&snapshot);
+        assert_eq!(metrics.cycles_total.get(), 10);
+        assert_eq!(metrics.overruns_total.get(), 2);
+
+        let snapshot = crate::state::MetricsSnapshot {
+            total_cycles: 15,
+            min_us: 100,
+            max_us: 200,
+            avg_us: 150,
+            target_us: 100,
+            overrun_count: 3,
+            jitter_us: 100,
+        };
+        metrics.update_from_snapshot(&snapshot);
+        assert_eq!(metrics.cycles_total.get(), 15);
+        assert_eq!(metrics.overruns_total.get(), 3);
     }
 }

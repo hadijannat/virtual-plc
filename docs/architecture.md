@@ -111,16 +111,22 @@ pub trait LogicEngine: Send {
     fn init(&mut self) -> PlcResult<()>;
 
     /// Execute one scan cycle
-    fn step(&mut self, inputs: &ProcessInputs) -> PlcResult<ProcessOutputs>;
+    fn step(&mut self, inputs: &ProcessData) -> PlcResult<ProcessData>;
 
     /// Handle fault condition (cleanup, safe state)
     fn fault(&mut self) -> PlcResult<()>;
+
+    /// Check if engine is ready to execute
+    fn is_ready(&self) -> bool;
 
     /// Hot-reload with new Wasm module (optional)
     fn reload_module(&mut self, wasm_bytes: &[u8], preserve_memory: bool) -> PlcResult<()>;
 
     /// Check if hot-reload is supported
     fn supports_hot_reload(&self) -> bool;
+
+    /// Get list of exported symbols
+    fn exports(&self) -> Vec<String>;
 }
 ```
 
@@ -190,8 +196,15 @@ Offset  Size   Description
 0x04    4      Digital Outputs (32 bits)
 0x08    32     Analog Inputs (16 x i16)
 0x28    32     Analog Outputs (16 x i16)
-0x48    8      Cycle Time (u64 nanoseconds)
-0x50    4      System Flags
+0x48    32     System Info (see below)
+0x68    ...    User Data Area
+
+System Info Layout (32 bytes):
+0x48    4      Cycle Time (u32 nanoseconds, capped at i32::MAX)
+0x4C    4      Flags (bit 0 = first cycle, bit 1 = fault mode)
+0x50    8      Cycle Count (u64)
+0x58    4      Fault Code (u32, 0 = no fault)
+0x5C    12     Reserved (zeroed)
 ```
 
 The process image uses a double-buffering pattern for lock-free updates in the real-time path.

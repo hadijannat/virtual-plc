@@ -447,7 +447,8 @@ pub struct WasmConfig {
     /// fuel mechanism. This provides tighter WCET guarantees than epoch-based timeouts
     /// but adds ~5-15% execution overhead.
     ///
-    /// When disabled (default), only epoch-based timeout is used.
+    /// When disabled, only epoch-based timeout is used.
+    /// Default is enabled for security hardening.
     pub use_fuel: bool,
 
     /// Fuel units to grant per PLC cycle.
@@ -463,12 +464,14 @@ pub struct WasmConfig {
 impl Default for WasmConfig {
     fn default() -> Self {
         Self {
-            max_memory_bytes: 16 * 1024 * 1024, // 16 MB
+            // Secure default: 1MB (16 pages of 64KB). Increase for larger programs.
+            max_memory_bytes: 1024 * 1024, // 1 MB
             max_epochs_per_cycle: 100,
             max_table_elements: 10_000,
             enable_simd: false,
             deterministic: false,
-            use_fuel: false,
+            // Secure default: fuel enabled to trap infinite loops.
+            use_fuel: true,
             fuel_per_cycle: 1_000_000, // 1M instructions default
         }
     }

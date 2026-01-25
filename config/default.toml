@@ -147,12 +147,14 @@ histogram_size = 10000
 percentiles = [50.0, 90.0, 99.0, 99.9, 99.99]
 
 # Enable web UI and HTTP metrics endpoint.
+# SECURITY: Disabled by default. Binds to 0.0.0.0 when enabled.
+# Only enable in trusted networks or behind a firewall.
 # When enabled, provides:
 #   - Web dashboard at http://localhost:8080/
 #   - REST API at /api/state, /api/metrics, /api/io, /api/faults
 #   - WebSocket streaming at /ws
 #   - Prometheus metrics at /metrics
-http_export = true
+http_export = false
 
 # HTTP server port for web UI and metrics.
 http_port = 8080

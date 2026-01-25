@@ -109,6 +109,14 @@ pub trait LogicEngine: Send {
     fn start_epoch_ticker(&self) -> Option<EpochTicker> {
         None
     }
+
+    /// List the exports provided by the loaded module.
+    ///
+    /// Returns a list of export names. Used for validation and diagnostics.
+    /// Returns an empty vec if no module is loaded.
+    fn exports(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Handle for an epoch ticker thread.
@@ -501,6 +509,8 @@ impl LogicEngine for WasmtimeHost {
             let sys_info = WasmSystemInfo {
                 cycle_time_ns,
                 flags: WasmSystemInfo::FLAG_FIRST_CYCLE,
+                cycle_count: 0,
+                fault_code: 0,
             };
             write_system_info(data, &sys_info);
         }
@@ -527,6 +537,7 @@ impl LogicEngine for WasmtimeHost {
         // Read values needed before mutable borrow
         let cycle_time_ns = self.cycle_time_ns;
         let first_cycle = self.store.data().first_cycle;
+        let cycle_count = self.store.data().cycle_count;
 
         // Copy inputs to Wasm memory
         {
@@ -541,6 +552,8 @@ impl LogicEngine for WasmtimeHost {
                 } else {
                     0
                 },
+                cycle_count,
+                fault_code: 0,
             };
             write_system_info(data, &sys_info);
         }
@@ -604,6 +617,7 @@ impl LogicEngine for WasmtimeHost {
 
         // Zero all outputs in memory
         let cycle_time_ns = self.cycle_time_ns;
+        let cycle_count = self.store.data().cycle_count;
         if let Some(memory) = self.memory {
             let data = memory.data_mut(&mut self.store);
             // Zero digital outputs (offset 4, size 4)
@@ -619,6 +633,8 @@ impl LogicEngine for WasmtimeHost {
             let sys_info = WasmSystemInfo {
                 cycle_time_ns,
                 flags: WasmSystemInfo::FLAG_FAULT_MODE,
+                cycle_count,
+                fault_code: 1, // Generic fault
             };
             write_system_info(data, &sys_info);
         }
@@ -693,29 +709,80 @@ impl LogicEngine for WasmtimeHost {
         } else {
             None
         };
+        let old_memory_len = old_memory_data.as_ref().map(Vec::len);
 
         // Save cycle count to preserve continuity
         let saved_cycle_count = self.store.data().cycle_count;
 
-        // Clear old instance state
-        self.instance = None;
-        self.memory = None;
-        self.step_fn = None;
-        self.init_fn = None;
-        self.fault_fn = None;
+        // ATOMIC RELOAD: Instantiate new module BEFORE clearing old state.
+        // This ensures that if instantiation fails, the old module remains active.
 
-        // Set the new module
-        self.module = Some(new_module);
+        // Ensure fuel is available before instantiation (start functions may run)
+        if self.use_fuel {
+            self.store
+                .set_fuel(self.fuel_per_cycle)
+                .map_err(|e| PlcError::Config(format!("Failed to set fuel: {e}")))?;
+        }
 
         // Instantiate the new module
-        self.instantiate()
+        let new_instance = self
+            .linker
+            .instantiate(&mut self.store, &new_module)
             .map_err(|e| PlcError::Config(format!("Failed to instantiate new module: {e}")))?;
 
-        // Restore memory contents if preserving state
-        if let (Some(old_data), Some(new_memory)) = (old_memory_data, self.memory) {
-            let new_data = new_memory.data_mut(&mut self.store);
-            let copy_len = old_data.len().min(new_data.len());
+        // Get memory export from new instance
+        let new_memory = new_instance
+            .get_memory(&mut self.store, "memory")
+            .ok_or_else(|| PlcError::Config("New module must export 'memory'".into()))?;
 
+        // Get required step function from new instance
+        let new_step_fn: TypedFunc<(), ()> = new_instance
+            .get_typed_func(&mut self.store, "step")
+            .map_err(|e| {
+            PlcError::Config(format!("New module must export 'step' function: {e}"))
+        })?;
+
+        // Get optional init function from new instance
+        let new_init_fn: Option<TypedFunc<(), ()>> =
+            new_instance.get_typed_func(&mut self.store, "init").ok();
+
+        // Get optional fault function from new instance
+        let new_fault_fn: Option<TypedFunc<(), ()>> =
+            new_instance.get_typed_func(&mut self.store, "fault").ok();
+
+        // Ensure new memory can fit old state BEFORE committing
+        if let Some(old_len) = old_memory_len {
+            let new_len = new_memory.data(&self.store).len();
+            if new_len < old_len {
+                return Err(PlcError::Config(format!(
+                    "Cannot preserve memory: new module has smaller memory ({} bytes) than old ({} bytes)",
+                    new_len, old_len
+                )));
+            }
+        }
+
+        // All instantiation succeeded - now commit state atomically
+        self.module = Some(new_module);
+        self.instance = Some(new_instance);
+        self.memory = Some(new_memory);
+        self.step_fn = Some(new_step_fn);
+        self.init_fn = new_init_fn;
+        self.fault_fn = new_fault_fn;
+
+        // Set memory in host state
+        self.store.data_mut().set_memory(new_memory);
+
+        debug!(
+            has_init = self.init_fn.is_some(),
+            has_fault = self.fault_fn.is_some(),
+            memory_pages = new_memory.size(&self.store),
+            "New module instantiated for hot-reload"
+        );
+
+        // Restore memory contents if preserving state
+        if let Some(old_data) = old_memory_data {
+            let new_data = new_memory.data_mut(&mut self.store);
+            let copy_len = old_data.len();
             if copy_len > 0 {
                 new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
                 debug!(
@@ -725,15 +792,7 @@ impl LogicEngine for WasmtimeHost {
                     "Memory state migrated"
                 );
             }
-
-            // If new memory is smaller, warn about potential data loss
-            if new_data.len() < old_data.len() {
-                warn!(
-                    old_size = old_data.len(),
-                    new_size = new_data.len(),
-                    "New module has smaller memory - some state may be lost"
-                );
-            }
+            debug_assert!(new_data.len() >= old_data.len());
         } else {
             // Call init on new module (either couldn't preserve memory or not requested)
             let has_init = self.init_fn.is_some();
@@ -760,6 +819,13 @@ impl LogicEngine for WasmtimeHost {
     fn supports_hot_reload(&self) -> bool {
         true
     }
+
+    fn exports(&self) -> Vec<String> {
+        self.module
+            .as_ref()
+            .map(|m| m.exports().map(|e| e.name().to_string()).collect())
+            .unwrap_or_default()
+    }
 }
 
 /// Configuration options for WasmtimeHost.
@@ -768,6 +834,10 @@ pub struct WasmtimeConfig {
     /// Cranelift optimization level.
     pub opt_level: OptLevel,
     /// Maximum linear memory size in bytes.
+    ///
+    /// Secure default is 1MB (per threat model AS1.2). Increase for larger
+    /// programs, but be aware that larger limits increase the attack surface
+    /// for resource exhaustion attacks.
     pub max_memory_bytes: usize,
     /// Maximum table elements.
     pub max_table_elements: u32,
@@ -785,11 +855,17 @@ impl Default for WasmtimeConfig {
     fn default() -> Self {
         Self {
             opt_level: OptLevel::Speed,
-            max_memory_bytes: 16 * 1024 * 1024, // 16 MB
+            // Secure default: 1MB (16 pages of 64KB). Per threat model AS1.2.
+            // Can be increased via config for larger programs.
+            max_memory_bytes: 1024 * 1024, // 1 MB
             max_table_elements: 10_000,
             enable_simd: false,
             deterministic: false,
-            use_fuel: false,
+            // Secure default: fuel enabled. Per threat model AS1.3.
+            // Prevents infinite loops from stalling the runtime.
+            use_fuel: true,
+            // Default fuel budget per cycle. 1M fuel units provides a reasonable
+            // execution budget for typical PLC programs. Can be tuned via config.
             fuel_per_cycle: 1_000_000,
         }
     }
@@ -1092,6 +1168,82 @@ mod tests {
         // Module should still work with preserved state
         let outputs = host.step(&inputs).unwrap();
         assert_eq!(outputs.digital_outputs[0] & 1, 1); // Marker still != 0
+    }
+
+    #[test]
+    fn test_hot_reload_rejects_smaller_memory_and_keeps_old_module() {
+        const LARGE_WAT: &str = r#"
+            (module
+                (import "plc" "read_di" (func $read_di (param i32) (result i32)))
+                (import "plc" "write_do" (func $write_do (param i32 i32)))
+
+                (memory (export "memory") 2)
+
+                (func (export "init")
+                    ;; Write a marker value near the end of the second page
+                    (i32.store (i32.const 0x11000) (i32.const 1))
+                )
+
+                (func (export "step")
+                    (call $write_do
+                        (i32.const 0)
+                        (i32.ne
+                            (i32.load (i32.const 0x11000))
+                            (i32.const 0)
+                        )
+                    )
+                )
+            )
+        "#;
+
+        const SMALL_WAT: &str = r#"
+            (module
+                (import "plc" "read_di" (func $read_di (param i32) (result i32)))
+                (import "plc" "write_do" (func $write_do (param i32 i32)))
+
+                (memory (export "memory") 1)
+
+                (func (export "init")
+                    (i32.store (i32.const 0x11000) (i32.const 1))
+                )
+
+                (func (export "step")
+                    (call $write_do
+                        (i32.const 0)
+                        (i32.ne
+                            (i32.load (i32.const 0x11000))
+                            (i32.const 0)
+                        )
+                    )
+                )
+            )
+        "#;
+
+        let mut host = WasmtimeHost::new(Duration::from_millis(1)).unwrap();
+        host.load_wat(LARGE_WAT).unwrap();
+        host.init().unwrap();
+
+        let memory = host.memory.unwrap();
+        assert_eq!(memory.size(&host.store), 2);
+
+        let data = memory.data(&host.store);
+        let marker = u32::from_le_bytes(data[0x11000..0x11004].try_into().unwrap());
+        assert_eq!(marker, 1);
+
+        let wasm_bytes = wat::parse_str(SMALL_WAT).unwrap();
+        let result = host.reload_module(&wasm_bytes, true);
+        assert!(result.is_err());
+
+        // Old module and memory should still be active
+        let memory = host.memory.unwrap();
+        assert_eq!(memory.size(&host.store), 2);
+        let data = memory.data(&host.store);
+        let marker = u32::from_le_bytes(data[0x11000..0x11004].try_into().unwrap());
+        assert_eq!(marker, 1);
+
+        let inputs = ProcessData::default();
+        let outputs = host.step(&inputs).unwrap();
+        assert_eq!(outputs.digital_outputs[0] & 1, 1);
     }
 
     #[test]

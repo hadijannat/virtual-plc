@@ -14,8 +14,20 @@
 //! 0x0004    4       Digital outputs (32 bits)
 //! 0x0008    32      Analog inputs (16 × i16)
 //! 0x0028    32      Analog outputs (16 × i16)
-//! 0x0048    8       System info (cycle time, flags)
-//! 0x0050    ...     User data area
+//! 0x0048    32      System info (see below)
+//! 0x0068    ...     User data area
+//! ```
+//!
+//! ## System Info Layout (32 bytes)
+//!
+//! ```text
+//! Offset    Size    Description
+//! ──────────────────────────────────────
+//! 0x0048    4       Cycle time (nanoseconds, u32)
+//! 0x004C    4       Flags (see WasmSystemInfo)
+//! 0x0050    8       Cycle count (u64)
+//! 0x0058    4       Fault code (u32)
+//! 0x005C    12      Reserved (zeroed)
 //! ```
 //!
 //! The host runtime copies I/O data into these fixed offsets before
@@ -33,10 +45,12 @@ pub const WASM_AI_OFFSET: u32 = 0x0008;
 pub const WASM_AO_OFFSET: u32 = 0x0028;
 /// Base offset for system info in Wasm memory.
 pub const WASM_SYSINFO_OFFSET: u32 = 0x0048;
+/// Size of system info region in bytes (aligned with threat model).
+pub const WASM_SYSINFO_SIZE: u32 = 32;
 /// Start of user data area.
-pub const WASM_USER_DATA_OFFSET: u32 = 0x0050;
+pub const WASM_USER_DATA_OFFSET: u32 = 0x0068;
 
-/// Size of the I/O region in bytes.
+/// Size of the I/O region in bytes (including system info).
 pub const WASM_IO_REGION_SIZE: u32 = WASM_USER_DATA_OFFSET;
 
 /// Number of digital input words.
@@ -48,7 +62,10 @@ pub const AI_CHANNELS: usize = 16;
 /// Number of analog output channels.
 pub const AO_CHANNELS: usize = 16;
 
-/// System info structure in Wasm memory.
+/// System info structure in Wasm memory (32 bytes total).
+///
+/// This structure is written to Wasm memory at `WASM_SYSINFO_OFFSET` and
+/// provides runtime information to the PLC program.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WasmSystemInfo {
@@ -57,6 +74,10 @@ pub struct WasmSystemInfo {
     pub cycle_time_ns: u64,
     /// Runtime flags (bit 0 = first cycle, bit 1 = fault mode).
     pub flags: u32,
+    /// Current cycle count (incremented each scan cycle).
+    pub cycle_count: u64,
+    /// Fault code (0 = no fault, non-zero = active fault).
+    pub fault_code: u32,
 }
 
 impl WasmSystemInfo {
@@ -128,11 +149,24 @@ pub fn copy_outputs_from_wasm(memory: &[u8], data: &mut ProcessData) {
 #[inline]
 pub fn write_system_info(memory: &mut [u8], info: &WasmSystemInfo) {
     let offset = WASM_SYSINFO_OFFSET as usize;
-    if memory.len() >= offset + 8 {
+    let size = WASM_SYSINFO_SIZE as usize;
+
+    if memory.len() >= offset + size {
+        // Layout (32 bytes total):
+        // 0x00: cycle_time (4 bytes, u32)
+        // 0x04: flags (4 bytes, u32)
+        // 0x08: cycle_count (8 bytes, u64)
+        // 0x10: fault_code (4 bytes, u32)
+        // 0x14: reserved (12 bytes, zeroed)
+
         // Cap at i32::MAX for consistency with get_cycle_time host function
         let cycle_time_u32 = info.cycle_time_ns.min(i32::MAX as u64) as u32;
         memory[offset..offset + 4].copy_from_slice(&cycle_time_u32.to_le_bytes());
         memory[offset + 4..offset + 8].copy_from_slice(&info.flags.to_le_bytes());
+        memory[offset + 8..offset + 16].copy_from_slice(&info.cycle_count.to_le_bytes());
+        memory[offset + 16..offset + 20].copy_from_slice(&info.fault_code.to_le_bytes());
+        // Zero reserved bytes
+        memory[offset + 20..offset + 32].fill(0);
     }
 }
 
@@ -210,7 +244,11 @@ mod tests {
         assert!(WASM_DO_OFFSET + 4 <= WASM_AI_OFFSET);
         assert!(WASM_AI_OFFSET + 32 <= WASM_AO_OFFSET);
         assert!(WASM_AO_OFFSET + 32 <= WASM_SYSINFO_OFFSET);
-        assert!(WASM_SYSINFO_OFFSET + 8 <= WASM_USER_DATA_OFFSET);
+        assert!(WASM_SYSINFO_OFFSET + WASM_SYSINFO_SIZE <= WASM_USER_DATA_OFFSET);
+
+        // Verify threat model alignment: sysinfo is 32 bytes
+        assert_eq!(WASM_SYSINFO_SIZE, 32);
+        assert_eq!(WASM_USER_DATA_OFFSET, 0x0068);
     }
 
     #[test]
@@ -295,12 +333,28 @@ mod tests {
         let info = WasmSystemInfo {
             cycle_time_ns: 1_000_000,
             flags: WasmSystemInfo::FLAG_FIRST_CYCLE,
+            cycle_count: 42,
+            fault_code: 0,
         };
 
         write_system_info(&mut memory, &info);
 
+        // Verify cycle time at offset 0x0048 (72)
         assert_eq!(read_cycle_time_from_memory(&memory), 1_000_000);
+
+        // Verify flags at offset 0x004C (76)
         let flags = u32::from_le_bytes(memory[76..80].try_into().unwrap());
         assert_eq!(flags, 1);
+
+        // Verify cycle count at offset 0x0050 (80)
+        let cycle_count = u64::from_le_bytes(memory[80..88].try_into().unwrap());
+        assert_eq!(cycle_count, 42);
+
+        // Verify fault code at offset 0x0058 (88)
+        let fault_code = u32::from_le_bytes(memory[88..92].try_into().unwrap());
+        assert_eq!(fault_code, 0);
+
+        // Verify reserved bytes at offset 0x005C (92) are zeroed
+        assert!(memory[92..104].iter().all(|&b| b == 0));
     }
 }

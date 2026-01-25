@@ -90,10 +90,12 @@ impl WebUiServer {
     ///
     /// Call this to get a `StateUpdater` that can be used to push
     /// state updates from the runtime to connected WebSocket clients.
+    /// The updater also updates Prometheus metrics automatically.
     pub fn state_updater(&self) -> StateUpdater {
         StateUpdater {
             state: Arc::clone(&self.state),
             broadcast_tx: self.broadcast_tx.clone(),
+            metrics: Some(Arc::clone(&self.metrics)),
         }
     }
 

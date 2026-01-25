@@ -115,18 +115,28 @@ If fuel is exhausted, the cycle is aborted and a fault is raised.
 
 ### Host Functions
 
-Minimal host function interface:
+Wasm modules import host functions from the `"plc"` module:
 
 ```wat
-;; Imported from host
-(import "env" "plc_trace" (func $trace (param i32 i32)))
-(import "env" "plc_fault" (func $fault (param i32)))
+;; I/O functions imported from "plc" module
+(import "plc" "read_di" (func $read_di (param i32) (result i32)))
+(import "plc" "write_do" (func $write_do (param i32 i32)))
+(import "plc" "read_ai" (func $read_ai (param i32) (result i32)))
+(import "plc" "write_ao" (func $write_ao (param i32 i32)))
 
-;; Exported to host
-(export "init" (func $init))
+;; System functions
+(import "plc" "get_cycle_time" (func $get_cycle_time (result i32)))
+(import "plc" "get_cycle_count" (func $get_cycle_count (result i64)))
+(import "plc" "is_first_cycle" (func $is_first_cycle (result i32)))
+(import "plc" "log_message" (func $log_message (param i32 i32)))
+
+;; Required exports to host
 (export "step" (func $step))
-(export "fault" (func $fault_handler))
 (export "memory" (memory $mem))
+
+;; Optional exports
+(export "init" (func $init))      ;; Called once at startup
+(export "fault" (func $fault))    ;; Called on fault condition
 ```
 
 ### Security Boundaries

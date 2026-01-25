@@ -104,9 +104,27 @@ END_PROGRAM
 | I/O addressing (AT %) | Highlighted |
 | Standard functions | Highlighted |
 
+## Publishing to VS Code Marketplace
+
+Before publishing to the VS Code Marketplace, update these placeholders in `package.json`:
+
+1. **`publisher`**: Replace `"virtual-plc"` with your VS Code Marketplace publisher ID
+2. **`repository.url`**: Replace `"https://github.com/your-org/virtual-plc"` with the actual repository URL
+
+Then package and publish:
+
+```bash
+# Login to your publisher account
+npx vsce login <publisher-id>
+
+# Publish the extension
+npx vsce publish
+```
+
 ## Contributing
 
-Contributions are welcome! Please see the main [Virtual PLC repository](https://github.com/your-org/virtual-plc) for contribution guidelines.
+Contributions are welcome! Please see the main Virtual PLC repository for contribution guidelines:
+https://github.com/hadijannat/virtual-plc
 
 ## License
 

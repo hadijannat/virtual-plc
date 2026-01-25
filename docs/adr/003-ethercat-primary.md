@@ -83,17 +83,36 @@ We support two EtherCAT master stacks:
 | SOEM | BSD | Lightweight, portable | Default, embedded |
 | IgH EtherLab | GPL | Full-featured, mature | Full installations |
 
-The `EthercatTransport` trait abstracts the master implementation:
+The `EthercatTransport` trait (`plc-fieldbus/src/ethercat.rs`) abstracts the transport layer, allowing
+different EtherCAT master implementations (SOEM, IgH, or simulated):
 
 ```rust
 pub trait EthercatTransport: Send {
-    fn init(&mut self, interface: &str) -> PlcResult<()>;
-    fn scan_slaves(&mut self) -> PlcResult<usize>;
-    fn configure_dc(&mut self, cycle_time_ns: u64) -> PlcResult<()>;
-    fn exchange(&mut self) -> PlcResult<()>;
-    fn shutdown(&mut self) -> PlcResult<()>;
+    /// Scan for slaves on the network
+    fn scan_slaves(&mut self) -> PlcResult<Vec<SlaveConfig>>;
+
+    /// Set all slaves to the specified state
+    fn set_state(&mut self, state: SlaveState) -> PlcResult<()>;
+
+    /// Configure DC for a slave
+    fn configure_slave_dc(&mut self, config: &DcSlaveConfig) -> PlcResult<()>;
+
+    /// Read the DC system time from the reference clock
+    fn read_dc_time(&mut self) -> PlcResult<u64>;
+
+    /// Exchange process data (send outputs, receive inputs)
+    fn exchange(&mut self, outputs: &[u8], inputs: &mut [u8]) -> PlcResult<u16>;
+
+    /// Read an SDO (Service Data Object)
+    fn sdo_read(&mut self, request: &SdoRequest) -> PlcResult<Vec<u8>>;
+
+    /// Write an SDO
+    fn sdo_write(&mut self, request: &SdoRequest) -> PlcResult<()>;
 }
 ```
+
+The `EthercatMaster` struct implements `FieldbusDriver` and uses an `EthercatTransport` for
+low-level communication.
 
 ## Implementation Details
 

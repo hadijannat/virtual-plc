@@ -68,6 +68,7 @@ async fn handle_socket(
             }
         }
     });
+    let send_abort = send_task.abort_handle();
 
     // Handle incoming messages from client (for commands, etc.)
     let recv_task = tokio::spawn(async move {
@@ -101,14 +102,17 @@ async fn handle_socket(
             }
         }
     });
+    let recv_abort = recv_task.abort_handle();
 
-    // Wait for either task to complete
+    // Wait for either task to complete, then abort the other to prevent leaks.
     tokio::select! {
-        _ = send_task => {
-            debug!("WebSocket send task ended");
+        result = send_task => {
+            debug!(?result, "WebSocket send task ended");
+            recv_abort.abort();
         }
-        _ = recv_task => {
-            debug!("WebSocket receive task ended");
+        result = recv_task => {
+            debug!(?result, "WebSocket receive task ended");
+            send_abort.abort();
         }
     }
 

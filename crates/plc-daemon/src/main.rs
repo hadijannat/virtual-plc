@@ -307,6 +307,10 @@ fn cmd_compile(args: CompileArgs) -> Result<()> {
 // SUBCOMMAND: validate
 // =============================================================================
 
+fn build_validation_host(config: &RuntimeConfig) -> Result<WasmtimeHost> {
+    WasmtimeHost::from_runtime_config(config).with_context(|| "Failed to create Wasm host")
+}
+
 fn cmd_validate(args: ValidateArgs) -> Result<()> {
     info!(module = ?args.module, "Validating WebAssembly module");
 
@@ -323,23 +327,47 @@ fn cmd_validate(args: ValidateArgs) -> Result<()> {
         module_bytes
     };
 
-    // Try to create a Wasmtime host and load the module
-    let mut host = WasmtimeHost::new(Duration::from_millis(1))
-        .with_context(|| "Failed to create Wasm host")?;
+    // Use runtime defaults so validation matches daemon limits
+    let config = RuntimeConfig::default();
+    let mut host = build_validation_host(&config)?;
 
     // load_module validates the module and checks for required exports (step, memory)
     host.load_module(&wasm_bytes)
         .with_context(|| "Module failed validation - check for required exports: step, memory")?;
 
+    // Get module exports for validation
+    let module_exports: std::collections::HashSet<String> = host.exports().into_iter().collect();
+
+    // Validate required exports are present
+    let required_exports: Vec<&str> = args
+        .exports
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut missing_exports = Vec::new();
+    for export in &required_exports {
+        if !module_exports.contains(*export) {
+            missing_exports.push(*export);
+        }
+    }
+
+    if !missing_exports.is_empty() {
+        anyhow::bail!(
+            "Module missing required exports: {}",
+            missing_exports.join(", ")
+        );
+    }
+
     // Try to initialize - this verifies the module can be instantiated
-    // and checks if init export exists
+    // and checks if init export works
     let init_result = host.init();
     let init_ok = init_result.is_ok();
     if let Err(e) = init_result {
-        // Check if it's a missing init (which is OK if not required)
-        let required_exports: Vec<&str> = args.exports.split(',').collect();
+        // init() failed - if init was required, that's an error
         if required_exports.contains(&"init") {
-            anyhow::bail!("Module init failed: {}", e);
+            anyhow::bail!("Module init() failed: {}", e);
         }
         // Otherwise, init is optional - module is still valid
     }
@@ -347,6 +375,11 @@ fn cmd_validate(args: ValidateArgs) -> Result<()> {
     if args.verbose {
         println!("Module information:");
         println!("  Size: {} bytes", wasm_bytes.len());
+        println!("  Exports: {}", host.exports().join(", "));
+        println!(
+            "  Required exports present: {}",
+            required_exports.join(", ")
+        );
         println!("  Has init: {}", init_ok);
         println!("  Ready: {}", host.is_ready());
         println!("  Supports hot-reload: {}", host.supports_hot_reload());
@@ -363,6 +396,11 @@ fn cmd_validate(args: ValidateArgs) -> Result<()> {
 
 fn cmd_simulate(args: SimulateArgs) -> Result<()> {
     use plc_runtime::io_image::ProcessData;
+
+    // Validate arguments
+    if args.cycles == 0 {
+        anyhow::bail!("Number of cycles must be at least 1");
+    }
 
     info!(module = ?args.module, cycles = args.cycles, "Starting simulation");
 
@@ -590,8 +628,25 @@ fn cmd_diagnose(args: DiagnoseArgs) -> Result<()> {
 
     // Timing test
     if !args.skip_timing_test {
+        // Validate timing parameters
+        if args.cycle_us == 0 {
+            anyhow::bail!("Cycle time must be at least 1 microsecond");
+        }
+        if args.duration == 0 {
+            anyhow::bail!("Duration must be at least 1 second");
+        }
+
         let target = Duration::from_micros(args.cycle_us);
         let iterations = (args.duration * 1_000_000) / args.cycle_us;
+
+        // Ensure at least one iteration
+        if iterations == 0 {
+            anyhow::bail!(
+                "Cycle time {} us is too large for duration {} s (need at least 1 iteration)",
+                args.cycle_us,
+                args.duration
+            );
+        }
 
         let mut max_jitter_us = 0i64;
         let mut total_jitter_us = 0i64;
@@ -891,7 +946,8 @@ fn run_daemon(
     let target_cycle_ns = u64::try_from(config.cycle_time.as_nanos()).unwrap_or(u64::MAX);
 
     // Start web UI server if HTTP export is enabled
-    let state_updater = if metrics_http_export {
+    // We keep the runtime alive for the daemon's lifetime and drop it during shutdown.
+    let (state_updater, _web_runtime) = if metrics_http_export {
         let bind_addr: SocketAddr = format!("0.0.0.0:{}", config.metrics.http_port)
             .parse()
             .context("Invalid HTTP bind address")?;
@@ -920,13 +976,10 @@ fn run_daemon(
             }
         });
 
-        // Keep runtime alive by leaking it (server runs for daemon lifetime)
-        std::mem::forget(rt);
-
         info!(addr = %bind_addr, "Web UI server started");
-        Some(updater)
+        (Some(updater), Some(rt))
     } else {
-        None
+        (None, None)
     };
 
     // Initialize fieldbus driver
@@ -1296,15 +1349,16 @@ fn run_scheduler_loop<E: LogicEngine>(
         }
     }
 
-    // Notify web UI of shutdown
-    if let Some(ref updater) = state_updater {
-        updater.set_runtime_state(scheduler.state());
-    }
-
     info!("Shutting down...");
 
+    // Stop scheduler first, then update UI with final state
     if let Err(e) = scheduler.stop() {
         warn!("Scheduler stop failed: {}", e);
+    }
+
+    // Notify web UI of shutdown state AFTER stop completes
+    if let Some(ref updater) = state_updater {
+        updater.set_runtime_state(scheduler.state());
     }
 
     if let Err(e) = fieldbus.shutdown() {
@@ -1385,5 +1439,24 @@ mod tests {
             }
             _ => panic!("Expected Diagnose command"),
         }
+    }
+
+    #[test]
+    fn test_validate_uses_runtime_wasm_limits() {
+        let mut config = RuntimeConfig::default();
+        config.wasm.max_memory_bytes = 64 * 1024; // 1 page
+
+        let mut host = build_validation_host(&config).unwrap();
+
+        const BIG_WAT: &str = r#"
+            (module
+                (memory (export "memory") 2)
+                (func (export "step"))
+            )
+        "#;
+
+        host.load_wat(BIG_WAT).unwrap();
+        let result = host.init();
+        assert!(result.is_err());
     }
 }

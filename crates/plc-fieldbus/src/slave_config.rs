@@ -422,7 +422,22 @@ impl NetworkConfig {
     }
 
     /// Recalculate process image offsets after slave changes.
-    fn recalculate_offsets(&mut self) {
+    ///
+    /// Call this method after modifying slaves via [`get_slave_mut()`] to ensure
+    /// process image offsets are correct. This is called automatically by
+    /// [`add_slave()`].
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Modify a slave's PDO mapping
+    /// if let Some(slave) = network.get_slave_mut(1) {
+    ///     slave.tx_pdos.push(PdoEntry { ... });
+    /// }
+    /// // Recalculate offsets after modification
+    /// network.recalculate_offsets();
+    /// ```
+    pub fn recalculate_offsets(&mut self) {
         let mut input_offset = 0;
         let mut output_offset = 0;
 

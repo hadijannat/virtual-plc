@@ -3,6 +3,10 @@ name = "plc-stdlib"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "IEC 61131-3 standard library implementation for Virtual PLC - timers, counters, and function blocks"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 anyhow.workspace = true

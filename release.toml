@@ -1,0 +1,47 @@
+# cargo-release configuration
+# https://github.com/crate-ci/cargo-release
+
+[workspace]
+# Allow releasing from main branch only
+allow-branch = ["main"]
+
+# Create git tags for releases
+tag = true
+tag-prefix = "v"
+tag-message = "Release {{version}}"
+
+# Sign tags if GPG is configured
+sign-tag = false
+
+# Push tags to remote
+push = true
+push-remote = "origin"
+
+# Create GitHub release (handled by workflow, not cargo-release)
+# We use the tag to trigger the release workflow instead
+
+# Pre-release hook - run tests before releasing
+pre-release-hook = ["cargo", "test", "--all-targets"]
+
+# Commit message format
+pre-release-commit-message = "chore: release {{version}}"
+
+# Replacements for CHANGELOG (if we add one later)
+# [[pre-release-replacements]]
+# file = "CHANGELOG.md"
+# search = "## \\[Unreleased\\]"
+# replace = "## [Unreleased]\n\n## [{{version}}] - {{date}}"
+
+# Workspace-level settings
+consolidate-commits = true
+consolidate-pushes = true
+
+# Don't publish to crates.io by default (use --execute to publish)
+publish = false
+
+# Development version suffix
+dev-version = true
+dev-version-ext = "dev"
+
+# Shared settings (for reference in per-crate configs)
+shared-version = true

@@ -75,6 +75,22 @@ jobs:
             cargo run -p plc-daemon -- compile "$f" -o /tmp/test.wasm
           done
 
+  # Security audit - vulnerability and license scanning
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.83.0
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo-deny (licenses & bans)
+        run: cargo deny check
+      - name: Run cargo-audit (vulnerabilities)
+        run: cargo audit
+
   # Docker build
   docker:
     name: Docker Build

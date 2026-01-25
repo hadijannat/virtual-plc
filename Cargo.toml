@@ -24,7 +24,12 @@ tempfile = "3"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-authors = ["Your Org <devnull@example.com>"]
+authors = ["Virtual PLC Contributors"]
+repository = "https://github.com/hadijannat/virtual-plc"
+homepage = "https://github.com/hadijannat/virtual-plc"
+documentation = "https://docs.rs/plc-common"
+keywords = ["plc", "industrial", "automation", "iec61131", "scada"]
+categories = ["embedded", "hardware-support", "simulation"]
 
 [workspace.dependencies]
 # Error handling

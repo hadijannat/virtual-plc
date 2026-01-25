@@ -3,6 +3,10 @@ name = "plc-common"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Common types and utilities for Virtual PLC - IEC 61131-3 types, error handling, and shared abstractions"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 anyhow.workspace = true

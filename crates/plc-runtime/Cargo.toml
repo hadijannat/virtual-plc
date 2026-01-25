@@ -3,6 +3,10 @@ name = "plc-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Real-time WebAssembly execution engine for Virtual PLC - cyclic scheduler, I/O image, and Wasmtime host"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 anyhow.workspace = true

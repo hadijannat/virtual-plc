@@ -1,0 +1,78 @@
+[Unit]
+Description=Virtual PLC Runtime Daemon
+Documentation=https://github.com/hadijannat/virtual-plc
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=plc
+Group=plc
+
+# Binary location
+ExecStart=/usr/local/bin/plc-daemon run --config /etc/vplc/config.toml
+
+# Real-time scheduling configuration
+# Priority 90 (range: 1-99, higher = more priority)
+# SCHED_FIFO for deterministic real-time behavior
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=90
+
+# CPU affinity - isolate to specific cores (uncomment and adjust)
+# CPUAffinity=2 3
+
+# Memory locking - prevent page faults during scan cycle
+LimitMEMLOCK=infinity
+LimitRTPRIO=99
+LimitNICE=-20
+
+# Capabilities for real-time operation
+# SYS_NICE: Allows setting real-time scheduling priority
+# IPC_LOCK: Allows locking memory with mlockall()
+# NET_RAW: Required for EtherCAT raw socket access
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK CAP_NET_RAW
+CapabilityBoundingSet=CAP_SYS_NICE CAP_IPC_LOCK CAP_NET_RAW
+
+# Working directory
+WorkingDirectory=/var/lib/vplc
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Environment
+Environment=RUST_LOG=info
+Environment=VPLC_CONFIG_DIR=/etc/vplc
+Environment=VPLC_DATA_DIR=/var/lib/vplc
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictRealtime=no
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+
+# Allow network access for fieldbus and web UI
+PrivateNetwork=no
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_PACKET
+
+# Allow read/write to config and data directories
+ReadWritePaths=/var/lib/vplc
+ReadOnlyPaths=/etc/vplc
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=plc-daemon
+
+[Install]
+WantedBy=multi-user.target

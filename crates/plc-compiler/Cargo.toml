@@ -3,6 +3,10 @@ name = "plc-compiler"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "IEC 61131-3 Structured Text to WebAssembly compiler for Virtual PLC"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 anyhow.workspace = true

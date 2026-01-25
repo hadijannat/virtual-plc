@@ -3,6 +3,10 @@ name = "plc-fieldbus"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Fieldbus abstraction layer for Virtual PLC - EtherCAT, Modbus, and simulated I/O drivers"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 anyhow.workspace = true

@@ -16,4 +16,4 @@ cargo +"${TOOLCHAIN}" install cargo-audit --version 0.22.0 --locked
 cargo +"${TOOLCHAIN}" deny check
 # Clear any stale/non-git advisory db and re-fetch.
 rm -rf "${CARGO_HOME:-$HOME/.cargo}/advisory-db"
-cargo +"${TOOLCHAIN}" audit
+cargo +"${TOOLCHAIN}" audit --file .cargo/audit.toml

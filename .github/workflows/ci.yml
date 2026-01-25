@@ -93,7 +93,7 @@ jobs:
       - name: Reset advisory DB for cargo-audit
         run: rm -rf ~/.cargo/advisory-db
       - name: Run cargo-audit (vulnerabilities)
-        run: cargo +1.88.0 audit
+        run: cargo +1.88.0 audit --file .cargo/audit.toml
 
   # Docker build
   docker:

@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build Status">
-  <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust" alt="Rust Version">
+  <img src="https://img.shields.io/badge/rust-1.83%2B-orange?logo=rust" alt="Rust Version">
   <img src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue" alt="License">
   <img src="https://img.shields.io/badge/crates-7-success" alt="Crates">
   <img src="https://img.shields.io/badge/IEC%2061131--3-Structured%20Text-purple" alt="IEC 61131-3">

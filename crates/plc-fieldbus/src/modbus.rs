@@ -14,7 +14,7 @@ use crate::{FieldbusDriver, FieldbusInputs, FieldbusOutputs};
 use plc_common::error::{PlcError, PlcResult};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, info, trace, warn};
 
 /// Modbus function codes.
@@ -248,6 +248,8 @@ pub struct ModbusTcpDriver {
     outputs: FieldbusOutputs,
     /// Receive buffer.
     rx_buffer: Vec<u8>,
+    /// Next allowed reconnect time (for non-blocking reconnection).
+    next_reconnect_time: Option<Instant>,
 }
 
 impl ModbusTcpDriver {
@@ -267,6 +269,7 @@ impl ModbusTcpDriver {
             inputs: FieldbusInputs::default(),
             outputs: FieldbusOutputs::default(),
             rx_buffer: vec![0u8; 260], // Max Modbus TCP frame size
+            next_reconnect_time: None,
         }
     }
 
@@ -299,12 +302,17 @@ impl ModbusTcpDriver {
         self.connection = Some(stream);
         self.state = ConnectionState::Connected;
         self.reconnect_attempts = 0;
+        self.next_reconnect_time = None;
 
         info!("Connected to Modbus TCP server");
         Ok(())
     }
 
     /// Attempt to reconnect after a connection failure.
+    ///
+    /// This method uses a non-blocking, cycle-deferred approach. Instead of
+    /// sleeping (which would block the entire PLC cycle), it checks if enough
+    /// time has passed since the last failed attempt before trying again.
     fn try_reconnect(&mut self) -> PlcResult<()> {
         if self.reconnect_attempts >= self.config.max_reconnect_attempts {
             self.state = ConnectionState::Failed;
@@ -312,6 +320,16 @@ impl ModbusTcpDriver {
                 "Max reconnection attempts ({}) exceeded",
                 self.config.max_reconnect_attempts
             )));
+        }
+
+        // Check if we need to wait before the next reconnect attempt
+        if let Some(next_time) = self.next_reconnect_time {
+            if Instant::now() < next_time {
+                // Not yet time to reconnect, return immediately without blocking
+                return Err(PlcError::FieldbusError(
+                    "Reconnecting: waiting for retry delay".into(),
+                ));
+            }
         }
 
         self.reconnect_attempts += 1;
@@ -323,8 +341,17 @@ impl ModbusTcpDriver {
             "Attempting Modbus reconnection"
         );
 
-        std::thread::sleep(self.config.reconnect_delay);
-        self.connect()
+        match self.connect() {
+            Ok(()) => {
+                // Success: next_reconnect_time is cleared in connect()
+                Ok(())
+            }
+            Err(e) => {
+                // Connection failed: schedule next attempt
+                self.next_reconnect_time = Some(Instant::now() + self.config.reconnect_delay);
+                Err(e)
+            }
+        }
     }
 
     /// Send a Modbus request and receive the response.
@@ -900,5 +927,119 @@ mod tests {
         assert_eq!(driver.outputs.digital, 0x12345678);
         assert_eq!(driver.outputs.analog[0], 100);
         assert_eq!(driver.outputs.analog[7], 800);
+    }
+
+    #[test]
+    fn test_next_reconnect_time_initialized_to_none() {
+        let driver = ModbusTcpDriver::new();
+        assert!(driver.next_reconnect_time.is_none());
+    }
+
+    #[test]
+    fn test_try_reconnect_returns_immediately_during_delay() {
+        let mut driver = ModbusTcpDriver::new();
+        // Set a future reconnect time (100ms from now)
+        driver.next_reconnect_time = Some(Instant::now() + Duration::from_millis(100));
+        driver.state = ConnectionState::Disconnected;
+
+        // Measure time before and after to verify no blocking
+        let start = Instant::now();
+        let result = driver.try_reconnect();
+        let elapsed = start.elapsed();
+
+        // Should return immediately (well under 100ms)
+        assert!(elapsed < Duration::from_millis(10));
+
+        // Should return an error indicating we're still in delay period
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, PlcError::FieldbusError(msg) if msg.contains("waiting for retry delay")),
+            "Expected 'waiting for retry delay' error, got: {err}"
+        );
+
+        // Should not increment reconnect attempts
+        assert_eq!(driver.reconnect_attempts, 0);
+    }
+
+    #[test]
+    fn test_try_reconnect_attempts_after_delay_expires() {
+        let mut driver = ModbusTcpDriver::new();
+        // Set a past reconnect time
+        driver.next_reconnect_time = Some(Instant::now() - Duration::from_millis(100));
+        driver.state = ConnectionState::Disconnected;
+
+        // This will fail to connect (no server), but it should attempt
+        let result = driver.try_reconnect();
+
+        // Should have attempted connection
+        assert_eq!(driver.reconnect_attempts, 1);
+
+        // Should fail (no server to connect to)
+        assert!(result.is_err());
+
+        // Should schedule next reconnect attempt
+        assert!(driver.next_reconnect_time.is_some());
+    }
+
+    #[test]
+    fn test_try_reconnect_schedules_next_attempt_on_failure() {
+        let mut driver = ModbusTcpDriver::new();
+        driver.state = ConnectionState::Disconnected;
+
+        // First attempt (no next_reconnect_time set)
+        let start = Instant::now();
+        let _ = driver.try_reconnect();
+
+        // Should have scheduled next attempt
+        assert!(driver.next_reconnect_time.is_some());
+        let next_time = driver.next_reconnect_time.unwrap();
+
+        // Next time should be approximately reconnect_delay in the future
+        let expected_min = start + driver.config.reconnect_delay - Duration::from_millis(50);
+        let expected_max = start + driver.config.reconnect_delay + Duration::from_millis(50);
+        assert!(
+            next_time >= expected_min && next_time <= expected_max,
+            "next_reconnect_time should be approximately reconnect_delay from now"
+        );
+    }
+
+    #[test]
+    fn test_try_reconnect_max_attempts_exceeded() {
+        let mut driver = ModbusTcpDriver::new();
+        driver.reconnect_attempts = driver.config.max_reconnect_attempts;
+        driver.state = ConnectionState::Disconnected;
+
+        let result = driver.try_reconnect();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, PlcError::FieldbusError(msg) if msg.contains("Max reconnection attempts")),
+            "Expected max attempts error, got: {err}"
+        );
+        assert_eq!(driver.state, ConnectionState::Failed);
+    }
+
+    #[test]
+    fn test_try_reconnect_non_blocking_multiple_calls() {
+        let mut driver = ModbusTcpDriver::new();
+        driver.state = ConnectionState::Disconnected;
+
+        // First call should attempt connection and fail
+        let _ = driver.try_reconnect();
+        assert_eq!(driver.reconnect_attempts, 1);
+        assert!(driver.next_reconnect_time.is_some());
+
+        // Immediate second call should return immediately (during delay)
+        let start = Instant::now();
+        let result = driver.try_reconnect();
+        let elapsed = start.elapsed();
+
+        // Should return immediately without blocking
+        assert!(elapsed < Duration::from_millis(10));
+        assert!(result.is_err());
+        // Should not have incremented attempts again
+        assert_eq!(driver.reconnect_attempts, 1);
     }
 }

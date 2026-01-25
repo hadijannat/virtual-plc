@@ -380,7 +380,20 @@ impl RtCapabilities {
 
     /// Check if memory locking is likely to succeed.
     pub fn can_lock_memory(&self) -> bool {
-        self.is_root || self.memlock_limit.is_some_and(|l| l == libc::RLIM_INFINITY)
+        if self.is_root {
+            return true;
+        }
+
+        #[cfg(target_family = "unix")]
+        {
+            self.memlock_limit
+                .is_some_and(|l| l == libc::RLIM_INFINITY)
+        }
+
+        #[cfg(not(target_family = "unix"))]
+        {
+            false
+        }
     }
 }
 

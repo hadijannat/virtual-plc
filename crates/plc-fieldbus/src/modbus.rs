@@ -703,9 +703,7 @@ impl ModbusTcpDriver {
     fn write_coils(&mut self, address: u16, values: &[bool]) -> PlcResult<()> {
         // Validate non-empty input (quantity=0 is invalid per Modbus spec)
         if values.is_empty() {
-            return Err(PlcError::FieldbusError(
-                "Cannot write zero coils".into(),
-            ));
+            return Err(PlcError::FieldbusError("Cannot write zero coils".into()));
         }
 
         // Optimization: use single-write FC for single value

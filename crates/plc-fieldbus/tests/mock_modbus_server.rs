@@ -214,7 +214,10 @@ impl MockModbusServer {
 
     /// Get the current behavior.
     pub fn behavior(&self) -> MockBehavior {
-        self.behavior.lock().map(|b| *b).unwrap_or(MockBehavior::Normal)
+        self.behavior
+            .lock()
+            .map(|b| *b)
+            .unwrap_or(MockBehavior::Normal)
     }
 
     /// Access the storage for reading/writing values.
@@ -468,21 +471,15 @@ impl MockModbusServer {
 
         // Parse and handle based on function code
         match FunctionCode::from_byte(function_code) {
-            Some(FunctionCode::ReadCoils) => {
-                Self::handle_read_bits(pdu, storage, true)
-            }
-            Some(FunctionCode::ReadDiscreteInputs) => {
-                Self::handle_read_bits(pdu, storage, false)
-            }
+            Some(FunctionCode::ReadCoils) => Self::handle_read_bits(pdu, storage, true),
+            Some(FunctionCode::ReadDiscreteInputs) => Self::handle_read_bits(pdu, storage, false),
             Some(FunctionCode::ReadHoldingRegisters) => {
                 Self::handle_read_registers(pdu, storage, true)
             }
             Some(FunctionCode::ReadInputRegisters) => {
                 Self::handle_read_registers(pdu, storage, false)
             }
-            Some(FunctionCode::WriteSingleCoil) => {
-                Self::handle_write_single_coil(pdu, storage)
-            }
+            Some(FunctionCode::WriteSingleCoil) => Self::handle_write_single_coil(pdu, storage),
             Some(FunctionCode::WriteSingleRegister) => {
                 Self::handle_write_single_register(pdu, storage)
             }
@@ -748,8 +745,7 @@ mod tests {
 
     /// Helper to send a Modbus TCP request and read the response.
     fn send_request(stream: &mut TcpStream, unit_id: u8, pdu: &[u8]) -> Vec<u8> {
-        static TRANSACTION_ID: std::sync::atomic::AtomicU16 =
-            std::sync::atomic::AtomicU16::new(0);
+        static TRANSACTION_ID: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
         let transaction_id = TRANSACTION_ID.fetch_add(1, Ordering::SeqCst);
 
@@ -801,7 +797,9 @@ mod tests {
         server.set_coil(7, true);
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Read Coils: FC=0x01, Start=0, Quantity=8
         let pdu = [0x01, 0x00, 0x00, 0x00, 0x08];
@@ -809,7 +807,7 @@ mod tests {
 
         assert_eq!(response[0], 0x01); // Function code
         assert_eq!(response[1], 1); // Byte count
-        // Bits: 0=1, 1=0, 2=1, 7=1 => 0b10000101 = 0x85
+                                    // Bits: 0=1, 1=0, 2=1, 7=1 => 0b10000101 = 0x85
         assert_eq!(response[2], 0x85);
 
         server.stop();
@@ -823,7 +821,9 @@ mod tests {
         server.set_discrete_input(3, true);
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Read Discrete Inputs: FC=0x02, Start=0, Quantity=8
         let pdu = [0x02, 0x00, 0x00, 0x00, 0x08];
@@ -845,7 +845,9 @@ mod tests {
         server.set_holding_register(1, 0x5678);
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Read Holding Registers: FC=0x03, Start=0, Quantity=2
         let pdu = [0x03, 0x00, 0x00, 0x00, 0x02];
@@ -868,7 +870,9 @@ mod tests {
         server.set_input_register(0, 0xABCD);
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Read Input Registers: FC=0x04, Start=0, Quantity=1
         let pdu = [0x04, 0x00, 0x00, 0x00, 0x01];
@@ -887,7 +891,9 @@ mod tests {
         let server = MockModbusServer::start(MockBehavior::Normal).unwrap();
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Write Single Coil: FC=0x05, Address=5, Value=ON (0xFF00)
         let pdu = [0x05, 0x00, 0x05, 0xFF, 0x00];
@@ -907,7 +913,9 @@ mod tests {
         let server = MockModbusServer::start(MockBehavior::Normal).unwrap();
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Write Single Register: FC=0x06, Address=10, Value=0x1234
         let pdu = [0x06, 0x00, 0x0A, 0x12, 0x34];
@@ -927,7 +935,9 @@ mod tests {
         let server = MockModbusServer::start(MockBehavior::Normal).unwrap();
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Write Multiple Coils: FC=0x0F, Start=0, Quantity=8, Byte count=1, Data=0xAA
         // 0xAA = 10101010 = coils 1,3,5,7 ON
@@ -955,7 +965,9 @@ mod tests {
         let server = MockModbusServer::start(MockBehavior::Normal).unwrap();
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Write Multiple Registers: FC=0x10, Start=0, Quantity=2, Bytes=4, Data=0x1234, 0x5678
         let pdu = [0x10, 0x00, 0x00, 0x00, 0x02, 0x04, 0x12, 0x34, 0x56, 0x78];
@@ -976,7 +988,9 @@ mod tests {
         let server = MockModbusServer::start(MockBehavior::Exception(0x02)).unwrap();
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Any request should get exception response
         let pdu = [0x03, 0x00, 0x00, 0x00, 0x01];
@@ -994,7 +1008,9 @@ mod tests {
         let server = MockModbusServer::start(MockBehavior::Normal).unwrap();
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Unknown function code 0x99
         let pdu = [0x99, 0x00, 0x00];
@@ -1011,7 +1027,9 @@ mod tests {
         let server = MockModbusServer::start(MockBehavior::Normal).unwrap();
 
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         // Read Holding Registers with out-of-range address (start=250, qty=10 > 256)
         let pdu = [0x03, 0x00, 0xFA, 0x00, 0x0A];
@@ -1034,7 +1052,9 @@ mod tests {
 
         // Now requests should get exception
         let mut stream = TcpStream::connect(server.local_addr()).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         let pdu = [0x03, 0x00, 0x00, 0x00, 0x01];
         let response = send_request(&mut stream, 1, &pdu);
@@ -1067,8 +1087,7 @@ mod tests {
         initial.coils[0] = true;
         initial.holding_registers[0] = 0xCAFE;
 
-        let server =
-            MockModbusServer::start_with_storage(MockBehavior::Normal, initial).unwrap();
+        let server = MockModbusServer::start_with_storage(MockBehavior::Normal, initial).unwrap();
 
         assert!(server.get_coil(0));
         assert_eq!(server.get_holding_register(0), 0xCAFE);
@@ -1089,7 +1108,9 @@ mod tests {
                 let addr = addr;
                 thread::spawn(move || {
                     let mut stream = TcpStream::connect(addr).unwrap();
-                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
 
                     let pdu = [0x03, 0x00, 0x00, 0x00, 0x01];
                     let response = send_request(&mut stream, 1, &pdu);

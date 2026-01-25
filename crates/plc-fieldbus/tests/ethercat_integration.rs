@@ -68,9 +68,7 @@ fn create_aio_slave(position: u16, input_channels: u8, output_channels: u8) -> S
     if input_channels > 0 {
         let mut tx_pdo = PdoMapping::new(0x1A00, true);
         for i in 1..=input_channels {
-            tx_pdo.add_entry(
-                PdoEntry::new(0x6000, i, 16).with_name(format!("AI Channel {}", i)),
-            );
+            tx_pdo.add_entry(PdoEntry::new(0x6000, i, 16).with_name(format!("AI Channel {}", i)));
         }
         slave.tx_pdos.push(tx_pdo);
     }
@@ -78,9 +76,7 @@ fn create_aio_slave(position: u16, input_channels: u8, output_channels: u8) -> S
     if output_channels > 0 {
         let mut rx_pdo = PdoMapping::new(0x1600, false);
         for i in 1..=output_channels {
-            rx_pdo.add_entry(
-                PdoEntry::new(0x7000, i, 16).with_name(format!("AO Channel {}", i)),
-            );
+            rx_pdo.add_entry(PdoEntry::new(0x7000, i, 16).with_name(format!("AO Channel {}", i)));
         }
         slave.rx_pdos.push(rx_pdo);
     }

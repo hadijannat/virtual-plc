@@ -902,6 +902,8 @@ mod soem_transport {
     use super::*;
     use plc_common::error::PlcError;
     use std::ffi::c_int;
+    use std::fs;
+    use std::path::Path;
 
     /// Default timeout for SDO operations in microseconds.
     const SDO_TIMEOUT_US: c_int = 50_000; // 50ms
@@ -917,6 +919,9 @@ mod soem_transport {
 
     /// I/O map size (4KB as per SOEM API).
     const IO_MAP_SIZE: usize = 4096;
+
+    /// Linux capability bit for CAP_NET_RAW.
+    const CAP_NET_RAW_BIT: u32 = 13;
 
     /// SOEM-based EtherCAT transport.
     ///
@@ -976,6 +981,44 @@ mod soem_transport {
     }
 
     impl SoemTransport {
+        fn check_interface_exists(interface: &str) -> PlcResult<()> {
+            let path = format!("/sys/class/net/{interface}");
+            if !Path::new(&path).exists() {
+                return Err(PlcError::FieldbusError(format!(
+                    "EtherCAT interface '{interface}' not found (expected {path})"
+                )));
+            }
+            Ok(())
+        }
+
+        fn has_cap_net_raw() -> bool {
+            let status = match fs::read_to_string("/proc/self/status") {
+                Ok(status) => status,
+                Err(_) => return false,
+            };
+
+            for line in status.lines() {
+                if let Some(value) = line.strip_prefix("CapEff:\t") {
+                    if let Ok(bits) = u64::from_str_radix(value.trim(), 16) {
+                        return (bits & (1u64 << CAP_NET_RAW_BIT)) != 0;
+                    }
+                    break;
+                }
+            }
+            false
+        }
+
+        fn check_raw_socket_privilege() -> PlcResult<()> {
+            let is_root = unsafe { libc::geteuid() == 0 };
+            if is_root || Self::has_cap_net_raw() {
+                return Ok(());
+            }
+
+            Err(PlcError::FieldbusError(
+                "EtherCAT requires CAP_NET_RAW (or root) to open raw sockets".into(),
+            ))
+        }
+
         /// Create a new SOEM transport for the given network interface.
         ///
         /// # Arguments
@@ -993,6 +1036,9 @@ mod soem_transport {
                     "Interface name cannot be empty".into(),
                 ));
             }
+
+            Self::check_interface_exists(interface)?;
+            Self::check_raw_socket_privilege()?;
 
             info!(interface, "Creating SOEM transport");
 
@@ -1312,7 +1358,8 @@ mod soem_transport {
             let input_start = output_len;
             let input_len = inputs.len().min(IO_MAP_SIZE - input_start);
             if input_start + input_len <= IO_MAP_SIZE {
-                inputs[..input_len].copy_from_slice(&self.io_map[input_start..input_start + input_len]);
+                inputs[..input_len]
+                    .copy_from_slice(&self.io_map[input_start..input_start + input_len]);
             }
 
             trace!(wkc, expected = self.expected_wkc, "Process data exchange");
@@ -1369,9 +1416,10 @@ mod soem_transport {
         }
 
         fn sdo_write(&mut self, request: &SdoRequest) -> PlcResult<()> {
-            let data = request.write_data.as_ref().ok_or_else(|| {
-                PlcError::FieldbusError("SDO write requires data".into())
-            })?;
+            let data = request
+                .write_data
+                .as_ref()
+                .ok_or_else(|| PlcError::FieldbusError("SDO write requires data".into()))?;
 
             debug!(
                 slave = request.slave,

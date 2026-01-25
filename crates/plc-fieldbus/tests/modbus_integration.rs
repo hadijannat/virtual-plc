@@ -223,10 +223,7 @@ fn test_write_single_coil() {
 
     // Verify the coil was set on the server
     // Note: write_coils with single value uses FC 0x05 (WriteSingleCoil)
-    assert!(
-        server.get_coil(10),
-        "Coil 10 should be ON after write"
-    );
+    assert!(server.get_coil(10), "Coil 10 should be ON after write");
 
     driver.shutdown().unwrap();
     server.stop();
@@ -349,7 +346,10 @@ fn test_exception_illegal_function() {
     driver.init().unwrap();
 
     let result = driver.read_inputs();
-    assert!(result.is_err(), "Expected error for illegal function exception");
+    assert!(
+        result.is_err(),
+        "Expected error for illegal function exception"
+    );
 
     let err = result.unwrap_err();
     let err_msg = format!("{}", err);
@@ -373,7 +373,10 @@ fn test_exception_illegal_address() {
     driver.init().unwrap();
 
     let result = driver.read_inputs();
-    assert!(result.is_err(), "Expected error for illegal address exception");
+    assert!(
+        result.is_err(),
+        "Expected error for illegal address exception"
+    );
 
     let err = result.unwrap_err();
     let err_msg = format!("{}", err);
@@ -397,7 +400,10 @@ fn test_exception_illegal_value() {
     driver.init().unwrap();
 
     let result = driver.read_inputs();
-    assert!(result.is_err(), "Expected error for illegal value exception");
+    assert!(
+        result.is_err(),
+        "Expected error for illegal value exception"
+    );
 
     let err = result.unwrap_err();
     let err_msg = format!("{}", err);
@@ -421,7 +427,10 @@ fn test_exception_server_failure() {
     driver.init().unwrap();
 
     let result = driver.read_inputs();
-    assert!(result.is_err(), "Expected error for server failure exception");
+    assert!(
+        result.is_err(),
+        "Expected error for server failure exception"
+    );
 
     let err = result.unwrap_err();
     let err_msg = format!("{}", err);
@@ -800,7 +809,10 @@ fn test_runtime_behavior_change() {
             break;
         }
     }
-    assert!(recovered, "Driver should recover after server returns to normal");
+    assert!(
+        recovered,
+        "Driver should recover after server returns to normal"
+    );
 
     driver.shutdown().unwrap();
     server.stop();

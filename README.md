@@ -79,7 +79,7 @@ vPLC's WebAssembly sandbox enables capabilities no other open source PLC offers:
 | `plc-compiler` | ✅ Functional | ST → AST → IR → Wasm pipeline complete |
 | `plc-runtime` | ✅ Functional | Cyclic scheduler, Wasm host, process image, metrics, fault recording |
 | `plc-stdlib` | ✅ Complete | All standard function blocks implemented |
-| `plc-fieldbus` | ✅ Functional | Simulated ✅, Modbus TCP ✅, EtherCAT ✅ (SOEM) |
+| `plc-fieldbus` | ✅ Functional | Simulated ✅, Modbus TCP ✅, EtherCAT ✅ (SOEM, Linux-only; hardware validation pending) |
 | `plc-daemon` | ✅ Functional | Binary entry point with signal handling, hot-reload, diagnostics |
 | `plc-common` | ✅ Complete | Shared types, configuration, error handling |
 | `plc-web-ui` | ✅ Functional | REST API, WebSocket streaming, embedded dashboard, Prometheus metrics |

@@ -82,11 +82,9 @@ impl PlcMetrics {
         )
         .expect("metric creation should succeed");
 
-        let overruns_total = IntCounter::new(
-            "plc_overruns_total",
-            "Total number of cycle time overruns",
-        )
-        .expect("metric creation should succeed");
+        let overruns_total =
+            IntCounter::new("plc_overruns_total", "Total number of cycle time overruns")
+                .expect("metric creation should succeed");
 
         let cycle_time_us = Gauge::new(
             "plc_cycle_time_microseconds",
@@ -152,9 +150,8 @@ impl PlcMetrics {
         )
         .expect("metric creation should succeed");
 
-        let faults_total =
-            IntCounter::new("plc_faults_total", "Total number of faults recorded")
-                .expect("metric creation should succeed");
+        let faults_total = IntCounter::new("plc_faults_total", "Total number of faults recorded")
+            .expect("metric creation should succeed");
 
         let digital_inputs = Gauge::new(
             "plc_digital_inputs",

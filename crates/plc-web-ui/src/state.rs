@@ -106,7 +106,11 @@ pub struct SharedState {
 impl SharedState {
     /// Get a full state snapshot.
     pub fn snapshot(&self) -> StateSnapshot {
-        let runtime_state = self.runtime_state.read().map(|s| s.to_string()).unwrap_or_default();
+        let runtime_state = self
+            .runtime_state
+            .read()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let io = self.io.read().map(|i| i.clone()).unwrap_or_default();
         let metrics = self.metrics.read().map(|m| m.clone()).unwrap_or_default();
         let faults = self.faults.read().map(|f| f.clone()).unwrap_or_default();

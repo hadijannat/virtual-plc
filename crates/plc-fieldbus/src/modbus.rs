@@ -114,7 +114,7 @@ impl MbapHeader {
     fn new(transaction_id: u16, pdu_length: u16, unit_id: u8) -> Self {
         Self {
             transaction_id,
-            protocol_id: 0, // Always 0 for Modbus
+            protocol_id: 0,         // Always 0 for Modbus
             length: pdu_length + 1, // +1 for unit_id
             unit_id,
         }
@@ -280,8 +280,9 @@ impl ModbusTcpDriver {
     fn connect(&mut self) -> PlcResult<()> {
         info!(addr = %self.config.server_addr, "Connecting to Modbus TCP server");
 
-        let stream = TcpStream::connect_timeout(&self.config.server_addr, self.config.connect_timeout)
-            .map_err(|e| PlcError::FieldbusError(format!("Connection failed: {e}")))?;
+        let stream =
+            TcpStream::connect_timeout(&self.config.server_addr, self.config.connect_timeout)
+                .map_err(|e| PlcError::FieldbusError(format!("Connection failed: {e}")))?;
 
         stream
             .set_read_timeout(Some(self.config.io_timeout))
@@ -329,7 +330,9 @@ impl ModbusTcpDriver {
     /// Send a Modbus request and receive the response.
     fn send_request(&mut self, pdu: &[u8]) -> PlcResult<Vec<u8>> {
         if self.connection.is_none() {
-            return Err(PlcError::FieldbusError("Not connected to Modbus server".into()));
+            return Err(PlcError::FieldbusError(
+                "Not connected to Modbus server".into(),
+            ));
         }
 
         let transaction_id = self.next_transaction_id();
@@ -357,14 +360,17 @@ impl ModbusTcpDriver {
 
         // Read response header
         {
-            let stream = self.connection.as_mut().ok_or_else(|| {
-                PlcError::FieldbusError("Connection lost during send".into())
-            })?;
+            let stream = self
+                .connection
+                .as_mut()
+                .ok_or_else(|| PlcError::FieldbusError("Connection lost during send".into()))?;
             let header_buf = &mut self.rx_buffer[..MbapHeader::SIZE];
             if let Err(e) = stream.read_exact(header_buf) {
                 self.connection = None;
                 self.state = ConnectionState::Disconnected;
-                return Err(PlcError::FieldbusError(format!("Receive header failed: {e}")));
+                return Err(PlcError::FieldbusError(format!(
+                    "Receive header failed: {e}"
+                )));
             }
         }
 
@@ -395,9 +401,10 @@ impl ModbusTcpDriver {
         }
 
         {
-            let stream = self.connection.as_mut().ok_or_else(|| {
-                PlcError::FieldbusError("Connection lost during receive".into())
-            })?;
+            let stream = self
+                .connection
+                .as_mut()
+                .ok_or_else(|| PlcError::FieldbusError("Connection lost during receive".into()))?;
             let pdu_buf = &mut self.rx_buffer[MbapHeader::SIZE..MbapHeader::SIZE + pdu_length];
             if let Err(e) = stream.read_exact(pdu_buf) {
                 self.connection = None;
@@ -432,7 +439,12 @@ impl ModbusTcpDriver {
     }
 
     /// Read coils (function 0x01) or discrete inputs (function 0x02).
-    fn read_bits(&mut self, function: FunctionCode, address: u16, quantity: u16) -> PlcResult<Vec<bool>> {
+    fn read_bits(
+        &mut self,
+        function: FunctionCode,
+        address: u16,
+        quantity: u16,
+    ) -> PlcResult<Vec<bool>> {
         let pdu = [
             function as u8,
             (address >> 8) as u8,
@@ -469,7 +481,12 @@ impl ModbusTcpDriver {
     }
 
     /// Read holding registers (function 0x03) or input registers (function 0x04).
-    fn read_registers(&mut self, function: FunctionCode, address: u16, quantity: u16) -> PlcResult<Vec<u16>> {
+    fn read_registers(
+        &mut self,
+        function: FunctionCode,
+        address: u16,
+        quantity: u16,
+    ) -> PlcResult<Vec<u16>> {
         let pdu = [
             function as u8,
             (address >> 8) as u8,
@@ -608,7 +625,8 @@ impl ModbusTcpDriver {
     /// Read analog inputs from the configured mapping.
     fn read_analog_inputs(&mut self) -> PlcResult<()> {
         if let Some(ref mapping) = self.config.analog_input_mapping {
-            let registers = self.read_registers(mapping.function, mapping.address, mapping.quantity)?;
+            let registers =
+                self.read_registers(mapping.function, mapping.address, mapping.quantity)?;
 
             for (i, &value) in registers.iter().take(16).enumerate() {
                 self.inputs.analog[i] = value as i16;
@@ -633,7 +651,9 @@ impl ModbusTcpDriver {
     /// Write analog outputs to the configured mapping.
     fn write_analog_outputs(&mut self) -> PlcResult<()> {
         if let Some(ref mapping) = self.config.analog_output_mapping {
-            let registers: Vec<u16> = self.outputs.analog
+            let registers: Vec<u16> = self
+                .outputs
+                .analog
                 .iter()
                 .take(mapping.quantity as usize)
                 .map(|&v| v as u16)
@@ -813,7 +833,9 @@ mod tests {
         let mut driver = ModbusTcpDriver::new();
         let outputs = FieldbusOutputs {
             digital: 0x12345678,
-            analog: [100, 200, 300, 400, 500, 600, 700, 800, 0, 0, 0, 0, 0, 0, 0, 0],
+            analog: [
+                100, 200, 300, 400, 500, 600, 700, 800, 0, 0, 0, 0, 0, 0, 0, 0,
+            ],
         };
 
         driver.set_outputs(&outputs);

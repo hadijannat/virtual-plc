@@ -88,7 +88,9 @@ pub trait LogicEngine: Send {
     /// The default implementation returns `Err(PlcError::Config)` indicating
     /// hot-reload is not supported.
     fn reload_module(&mut self, _wasm_bytes: &[u8], _preserve_memory: bool) -> PlcResult<()> {
-        Err(PlcError::Config("Hot-reload not supported by this engine".into()))
+        Err(PlcError::Config(
+            "Hot-reload not supported by this engine".into(),
+        ))
     }
 
     /// Check if the engine supports hot-reload.
@@ -739,9 +741,9 @@ impl LogicEngine for WasmtimeHost {
                 self.set_epoch_deadline();
                 self.ensure_fuel()?;
                 if let Some(init_fn) = &self.init_fn {
-                    init_fn
-                        .call(&mut self.store, ())
-                        .map_err(|e| PlcError::WasmTrap(format!("init() failed after reload: {e}")))?;
+                    init_fn.call(&mut self.store, ()).map_err(|e| {
+                        PlcError::WasmTrap(format!("init() failed after reload: {e}"))
+                    })?;
                 }
             }
         }
@@ -750,10 +752,7 @@ impl LogicEngine for WasmtimeHost {
         self.store.data_mut().cycle_count = saved_cycle_count;
         self.store.data_mut().first_cycle = false;
 
-        info!(
-            cycle_count = saved_cycle_count,
-            "Hot-reload complete"
-        );
+        info!(cycle_count = saved_cycle_count, "Hot-reload complete");
 
         Ok(())
     }

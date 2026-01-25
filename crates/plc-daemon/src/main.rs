@@ -273,8 +273,7 @@ fn cmd_compile(args: CompileArgs) -> Result<()> {
     }
 
     // Compile to Wasm
-    let wasm_bytes = plc_compiler::compile(&source)
-        .with_context(|| "Compilation failed")?;
+    let wasm_bytes = plc_compiler::compile(&source).with_context(|| "Compilation failed")?;
 
     // Determine output path
     let output_path = args.output.unwrap_or_else(|| {
@@ -294,7 +293,8 @@ fn cmd_compile(args: CompileArgs) -> Result<()> {
             .with_context(|| format!("Failed to write Wasm file: {:?}", output_path))?;
     }
 
-    println!("Compiled {} -> {} ({} bytes)",
+    println!(
+        "Compiled {} -> {} ({} bytes)",
         args.input.display(),
         output_path.display(),
         wasm_bytes.len()
@@ -381,8 +381,7 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
 
     // Create Wasm host
     let cycle_time = Duration::from_millis(args.cycle_time_ms);
-    let mut host = WasmtimeHost::new(cycle_time)
-        .with_context(|| "Failed to create Wasm host")?;
+    let mut host = WasmtimeHost::new(cycle_time).with_context(|| "Failed to create Wasm host")?;
 
     host.load_module(&wasm_bytes)
         .with_context(|| "Failed to load module")?;
@@ -391,23 +390,30 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
     host.init().with_context(|| "Module init() failed")?;
 
     // Parse initial digital inputs
-    let initial_di = if args.digital_inputs.starts_with("0x") || args.digital_inputs.starts_with("0X") {
-        u32::from_str_radix(&args.digital_inputs[2..], 16)
-            .with_context(|| "Invalid hex value for digital_inputs")?
-    } else {
-        args.digital_inputs.parse::<u32>()
-            .with_context(|| "Invalid value for digital_inputs")?
-    };
+    let initial_di =
+        if args.digital_inputs.starts_with("0x") || args.digital_inputs.starts_with("0X") {
+            u32::from_str_radix(&args.digital_inputs[2..], 16)
+                .with_context(|| "Invalid hex value for digital_inputs")?
+        } else {
+            args.digital_inputs
+                .parse::<u32>()
+                .with_context(|| "Invalid value for digital_inputs")?
+        };
 
     // Create process inputs using ProcessData
     let mut inputs = ProcessData::default();
     inputs.digital_inputs[0] = initial_di;
 
-    println!("Simulating {} cycles with {}ms cycle time...\n", args.cycles, args.cycle_time_ms);
+    println!(
+        "Simulating {} cycles with {}ms cycle time...\n",
+        args.cycles, args.cycle_time_ms
+    );
 
     if args.print_every > 0 {
-        println!("{:>8} {:>12} {:>12} {:>12}",
-            "Cycle", "DI (hex)", "DO (hex)", "AO[0]");
+        println!(
+            "{:>8} {:>12} {:>12} {:>12}",
+            "Cycle", "DI (hex)", "DO (hex)", "AO[0]"
+        );
         println!("{:-<8} {:-<12} {:-<12} {:-<12}", "", "", "", "");
     }
 
@@ -415,12 +421,14 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
 
     for cycle in 0..args.cycles {
         // Execute step
-        let outputs = host.step(&inputs)
+        let outputs = host
+            .step(&inputs)
             .with_context(|| format!("Cycle {} failed", cycle))?;
 
         // Print state periodically
         if args.print_every > 0 && (cycle % args.print_every == 0 || cycle == args.cycles - 1) {
-            println!("{:>8} {:>12} {:>12} {:>12}",
+            println!(
+                "{:>8} {:>12} {:>12} {:>12}",
                 cycle,
                 format!("0x{:08X}", inputs.digital_inputs[0]),
                 format!("0x{:08X}", outputs.digital_outputs[0]),
@@ -436,7 +444,10 @@ fn cmd_simulate(args: SimulateArgs) -> Result<()> {
     println!("\nSimulation complete:");
     println!("  Cycles: {}", args.cycles);
     println!("  Elapsed: {:.2}s", elapsed.as_secs_f64());
-    println!("  Avg cycle: {:.2}ms", elapsed.as_millis() as f64 / args.cycles as f64);
+    println!(
+        "  Avg cycle: {:.2}ms",
+        elapsed.as_millis() as f64 / args.cycles as f64
+    );
 
     Ok(())
 }
@@ -556,9 +567,7 @@ fn cmd_diagnose(args: DiagnoseArgs) -> Result<()> {
                         // Recommended for EtherCAT if Intel i210/i350/i225
                         let recommended_drivers = ["igb", "igc", "e1000e"];
                         iface.ethercat_suitable = iface.is_physical
-                            && recommended_drivers
-                                .iter()
-                                .any(|d| iface.driver.contains(d));
+                            && recommended_drivers.iter().any(|d| iface.driver.contains(d));
 
                         diag.network_interfaces.push(iface);
                     }
@@ -645,14 +654,14 @@ fn cmd_diagnose(args: DiagnoseArgs) -> Result<()> {
         );
     }
     if !diag.capabilities.raw_sockets {
-        diag.recommendations.push(
-            "Grant CAP_NET_RAW capability for EtherCAT raw socket access".to_string(),
-        );
+        diag.recommendations
+            .push("Grant CAP_NET_RAW capability for EtherCAT raw socket access".to_string());
     }
     if diag.timing.ran_test {
         if diag.timing.max_jitter_us > args.cycle_us as i64 {
-            diag.recommendations
-                .push("Max jitter exceeds cycle time - consider longer cycle or RT tuning".to_string());
+            diag.recommendations.push(
+                "Max jitter exceeds cycle time - consider longer cycle or RT tuning".to_string(),
+            );
         }
         if diag.timing.overruns > 0 {
             diag.recommendations.push(format!(
@@ -665,9 +674,8 @@ fn cmd_diagnose(args: DiagnoseArgs) -> Result<()> {
     // Check for suitable EtherCAT interface
     let has_ethercat_nic = diag.network_interfaces.iter().any(|i| i.ethercat_suitable);
     if !has_ethercat_nic && !diag.network_interfaces.is_empty() {
-        diag.recommendations.push(
-            "No recommended EtherCAT NIC found (Intel i210/i350/i225 preferred)".to_string(),
-        );
+        diag.recommendations
+            .push("No recommended EtherCAT NIC found (Intel i210/i350/i225 preferred)".to_string());
     }
 
     // Output
@@ -999,10 +1007,10 @@ fn create_fieldbus_driver(config: &RuntimeConfig) -> Result<Box<dyn FieldbusDriv
         FieldbusDriverType::ModbusTcp => {
             let modbus_cfg = config.fieldbus.modbus.as_ref().cloned().unwrap_or_default();
 
-            let server_addr: std::net::SocketAddr = modbus_cfg
-                .address
-                .parse()
-                .with_context(|| format!("Invalid Modbus server address: {}", modbus_cfg.address))?;
+            let server_addr: std::net::SocketAddr =
+                modbus_cfg.address.parse().with_context(|| {
+                    format!("Invalid Modbus server address: {}", modbus_cfg.address)
+                })?;
 
             let driver_config = ModbusTcpConfig {
                 server_addr,
@@ -1023,10 +1031,7 @@ fn create_fieldbus_driver(config: &RuntimeConfig) -> Result<Box<dyn FieldbusDriv
 }
 
 /// Create scheduler with the given logic engine.
-fn create_scheduler<E: LogicEngine>(
-    engine: E,
-    config: &RuntimeConfig,
-) -> Scheduler<E> {
+fn create_scheduler<E: LogicEngine>(engine: E, config: &RuntimeConfig) -> Scheduler<E> {
     SchedulerBuilder::new(engine)
         .config(config.clone())
         .watchdog_timeout(config.watchdog_timeout)
@@ -1173,7 +1178,10 @@ fn run_scheduler_loop<E: LogicEngine>(
                     );
                     // Record fault in web UI
                     if let Some(ref updater) = state_updater {
-                        updater.record_fault("Fieldbus failure limit exceeded".to_string(), cycles_run);
+                        updater.record_fault(
+                            "Fieldbus failure limit exceeded".to_string(),
+                            cycles_run,
+                        );
                         updater.set_runtime_state(RuntimeState::Fault);
                     }
                     if let Err(e) = scheduler.enter_fault("Fieldbus failure limit exceeded") {

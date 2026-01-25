@@ -71,10 +71,7 @@ fn parse_pou(pair: Pair<Rule>) -> Result<ProgramUnit> {
 
 fn parse_program(pair: Pair<Rule>) -> Result<Program> {
     let mut inner = pair.into_inner();
-    let name = inner
-        .expect_next("program name")?
-        .as_str()
-        .to_string();
+    let name = inner.expect_next("program name")?.as_str().to_string();
 
     let mut variables = Vec::new();
     let mut body = Vec::new();
@@ -131,10 +128,7 @@ fn parse_function_block(pair: Pair<Rule>) -> Result<FunctionBlock> {
 
 fn parse_function(pair: Pair<Rule>) -> Result<Function> {
     let mut inner = pair.into_inner();
-    let name = inner
-        .expect_next("function name")?
-        .as_str()
-        .to_string();
+    let name = inner.expect_next("function name")?.as_str().to_string();
     let return_type = parse_data_type(inner.expect_next("function return type")?)?;
 
     let mut variables = Vec::new();
@@ -164,7 +158,10 @@ fn parse_function(pair: Pair<Rule>) -> Result<Function> {
 fn parse_var_block(pair: Pair<Rule>) -> Result<VarBlock> {
     let mut inner = pair.into_inner();
 
-    let kind_str = inner.expect_next("variable block kind")?.as_str().to_uppercase();
+    let kind_str = inner
+        .expect_next("variable block kind")?
+        .as_str()
+        .to_uppercase();
     let kind = match kind_str.as_str() {
         "VAR" => VarBlockKind::Var,
         "VAR_INPUT" => VarBlockKind::Input,
@@ -482,8 +479,7 @@ fn parse_case_values(pair: Pair<Rule>) -> Result<Vec<CaseValue>> {
     for item in pair.into_inner() {
         if item.as_rule() == Rule::case_value {
             let mut parts = item.into_inner();
-            let first = parts
-                .expect_next("case value expression")?;
+            let first = parts.expect_next("case value expression")?;
             let first_span = span_from_pair(&first);
             let first_expr = Spanned::new(parse_expression(first)?, first_span);
 
@@ -502,10 +498,7 @@ fn parse_case_values(pair: Pair<Rule>) -> Result<Vec<CaseValue>> {
 fn parse_for(pair: Pair<Rule>) -> Result<Statement> {
     let mut inner = pair.into_inner();
 
-    let variable = inner
-        .expect_next("FOR loop variable")?
-        .as_str()
-        .to_string();
+    let variable = inner.expect_next("FOR loop variable")?.as_str().to_string();
 
     let from_pair = inner.expect_next("FOR loop start expression")?;
     let from_span = span_from_pair(&from_pair);

@@ -79,7 +79,7 @@ vPLC's WebAssembly sandbox enables capabilities no other open source PLC offers:
 | `plc-compiler` | ✅ Functional | ST → AST → IR → Wasm pipeline complete |
 | `plc-runtime` | ✅ Functional | Cyclic scheduler, Wasm host, process image, metrics, fault recording |
 | `plc-stdlib` | ✅ Complete | All standard function blocks implemented |
-| `plc-fieldbus` | 🔶 Partial | Simulated ✅, Modbus TCP ✅, EtherCAT scaffolded |
+| `plc-fieldbus` | ✅ Functional | Simulated ✅, Modbus TCP ✅, EtherCAT ✅ (SOEM) |
 | `plc-daemon` | ✅ Functional | Binary entry point with signal handling, hot-reload, diagnostics |
 | `plc-common` | ✅ Complete | Shared types, configuration, error handling |
 | `plc-web-ui` | ✅ Functional | REST API, WebSocket streaming, embedded dashboard, Prometheus metrics |
@@ -174,7 +174,7 @@ sequenceDiagram
 | `plc-daemon` | Binary entry point with signal handling and diagnostics |
 | `plc-runtime` | Cyclic scheduler, Wasm host (Wasmtime), process image |
 | `plc-compiler` | IEC 61131-3 Structured Text → WebAssembly compiler |
-| `plc-fieldbus` | Fieldbus abstraction (EtherCAT, Modbus TCP, simulated) |
+| `plc-fieldbus` | Fieldbus drivers (EtherCAT/SOEM, Modbus TCP, simulated) — 126+ tests |
 | `plc-stdlib` | Standard function blocks (timers, counters, triggers) |
 | `plc-common` | Shared IEC types, configuration, error handling |
 | `plc-web-ui` | Control plane web interface (scaffold) |
@@ -272,6 +272,29 @@ http_port = 9090
 ```
 
 See [`config/default.toml`](config/default.toml) for a fully documented example.
+
+### Feature Flags
+
+The `plc-fieldbus` crate uses feature flags to enable optional functionality:
+
+| Feature | Description |
+|---------|-------------|
+| `simulated` | Simulated fieldbus for testing without hardware (default) |
+| `soem` | EtherCAT support via SOEM library (Linux only) |
+
+```bash
+# Build with EtherCAT support (Linux only)
+cargo build --release -p plc-fieldbus --features soem
+
+# Build with all fieldbus drivers
+cargo build --release -p plc-daemon --features plc-fieldbus/soem
+```
+
+**EtherCAT System Requirements:**
+- Linux with raw socket support
+- `CAP_NET_RAW` capability or root privileges
+- SOEM library (`libsoem-dev` on Debian/Ubuntu)
+- Dedicated network interface for EtherCAT segment
 
 ---
 
@@ -423,7 +446,7 @@ pub trait FieldbusDriver: Send {
 }
 ```
 
-Implementations: `SimulatedDriver`, `ModbusTcpDriver`, `EtherCatDriver` (scaffold)
+Implementations: `SimulatedDriver`, `ModbusTcpDriver`, `EtherCatDriver` (SOEM)
 
 ---
 
@@ -442,9 +465,7 @@ Implementations: `SimulatedDriver`, `ModbusTcpDriver`, `EtherCatDriver` (scaffol
 - [x] Hot-reload of logic modules (SIGHUP trigger, state preservation)
 - [x] VS Code extension for Structured Text
 - [x] GitHub Actions CI/CD pipeline
-
-### In Progress
-- [ ] EtherCAT master integration (SOEM-based)
+- [x] EtherCAT master integration (SOEM-based, Linux only)
 
 ### Planned
 - [ ] Ladder Diagram (LD) support

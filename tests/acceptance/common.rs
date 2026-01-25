@@ -63,8 +63,15 @@ pub fn has_preempt_rt() -> bool {
 }
 
 /// Check if running as root (required for RT priority).
+#[cfg(target_family = "unix")]
 pub fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
+}
+
+/// Check if running as root (required for RT priority).
+#[cfg(not(target_family = "unix"))]
+pub fn is_root() -> bool {
+    false
 }
 
 /// Check if cyclictest is available.

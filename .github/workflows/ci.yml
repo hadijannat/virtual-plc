@@ -90,6 +90,8 @@ jobs:
         run: cargo +1.88.0 install cargo-audit --version 0.22.0 --locked
       - name: Run cargo-deny (licenses & bans)
         run: cargo +1.88.0 deny check
+      - name: Reset advisory DB for cargo-audit
+        run: rm -rf ~/.cargo/advisory-db
       - name: Run cargo-audit (vulnerabilities)
         run: cargo +1.88.0 audit
 

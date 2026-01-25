@@ -13,13 +13,7 @@ targets = [
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 
-# Fail CI on any vulnerability
-vulnerability = "deny"
-
-# Warn on unmaintained crates
-unmaintained = "warn"
-
-# Warn on yanked crates
+# Advisory levels are deny by default; keep yanked as warn.
 yanked = "warn"
 
 # Ignore specific advisories (with justification)
@@ -43,12 +37,6 @@ allow = [
     "MPL-2.0",  # wasmtime uses this
 ]
 
-# Copyleft licenses that require review
-copyleft = "warn"
-
-# Unknown licenses should be reviewed
-unlicensed = "deny"
-
 # Crate-specific overrides
 [[licenses.clarify]]
 name = "ring"
@@ -62,9 +50,6 @@ multiple-versions = "warn"
 # Deny wildcards in dependencies
 wildcards = "deny"
 
-# Allow workspace members
-allow-build-scripts = ["*"]
-
 # Deny specific crates
 deny = [
     # openssl is complex to deploy; prefer rustls
@@ -76,6 +61,9 @@ skip = []
 
 # Skip checking the entire tree for certain crates
 skip-tree = []
+
+[bans.build]
+allow-build-scripts = ["*"]
 
 [sources]
 # Only allow crates from crates.io

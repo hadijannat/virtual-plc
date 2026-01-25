@@ -63,9 +63,6 @@ skip = []
 # Skip checking the entire tree for certain crates
 skip-tree = []
 
-[bans.build]
-enable-builtin-globs = true
-
 [sources]
 # Only allow crates from crates.io
 unknown-registry = "deny"

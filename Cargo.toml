@@ -58,7 +58,7 @@ nix = { version = "0.29", features = ["sched", "mman", "signal", "time"] }
 crossbeam-utils = "0.8"
 
 # Wasm runtime
-wasmtime = "17"
+wasmtime = "24.0.5"
 wat = "1"
 
 # Compiler tools

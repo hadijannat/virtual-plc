@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build Status">
   <img src="https://img.shields.io/badge/rust-1.83%2B-orange?logo=rust" alt="Rust Version">
   <img src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue" alt="License">
-  <a href="https://doi.org/10.5281/zenodo.18732535"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.18732535.svg" alt="DOI"></a>
+  <a href="https://doi.org/10.5281/zenodo.18732535"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.18732535-blue" alt="DOI"></a>
   <img src="https://img.shields.io/badge/crates-7-success" alt="Crates">
   <img src="https://img.shields.io/badge/IEC%2061131--3-Structured%20Text-purple" alt="IEC 61131-3">
 </p>
